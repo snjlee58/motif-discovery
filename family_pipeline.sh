@@ -368,7 +368,7 @@ if [ -f "$MCSA_FILE" ]; then
     $MCSA_FILE \
     $SCRATCH/$OUTDIR/alignment_mapping.json \
     --pdb-id $PDB_ID_LOWER \
-    --top-n 10 \
+    --top-n 6 \
     --exclude-gaps \
     --min-identity 0.2 \
     --output $SCRATCH/$OUTDIR/baseline_performance.json
