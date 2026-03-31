@@ -273,8 +273,22 @@ fi
 echo "  DEBUG: finished download loop"
 
 # Add the experimental PDB structure for the query
-echo "  DEBUG: copying PDB"
-cp $SCRATCH/${PDB_ID}.pdb $SCRATCH/$OUTDIR/structures/ 2>/dev/null || true
+PDB_FILE="$SCRATCH/${PDB_ID}.pdb"
+if [ ! -f "$PDB_FILE" ]; then
+  echo "  Downloading $PDB_ID from RCSB..."
+  wget -q --timeout=30 \
+    "https://files.rcsb.org/download/${PDB_ID}.pdb" \
+    -O "$PDB_FILE" 2>/dev/null || {
+    echo "  WARNING: Could not download $PDB_ID.pdb from RCSB"
+  }
+fi
+
+if [ -f "$PDB_FILE" ]; then
+  echo "  Copying $PDB_ID.pdb into structures/"
+  cp "$PDB_FILE" $SCRATCH/$OUTDIR/structures/
+else
+  echo "  WARNING: No experimental PDB for $PDB_ID. Will use AlphaFold structure in MSA."
+fi
 
 echo "  DEBUG: counting structures"
 N_STRUCTURES=$(find $SCRATCH/$OUTDIR/structures -name "*.pdb" -o -name "*.cif" | wc -l)
@@ -328,6 +342,7 @@ python3 map_alignment_to_pdb.py \
   $MSA_FILE \
   $PDB_ID \
   --pdb-file $SCRATCH/${PDB_ID}.pdb \
+  --uniprot $UNIPROT_ID \
   -o $SCRATCH/$OUTDIR/alignment_mapping.json
 
 #####################
