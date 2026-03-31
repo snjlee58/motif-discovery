@@ -70,7 +70,7 @@ OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 # CLUSTER_FILE="$SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv"
 CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
-MAX_MEMBERS=100  # cap to keep FoldMason tractable
+MAX_MEMBERS=200  # cap to keep FoldMason tractable
 
 #####################
 # STEP 0: Resolve UniProt ID if not provided
