@@ -177,7 +177,7 @@ def print_results(predicted: List[int], true_set: Set[int], metrics: Dict,
     print("="*70)
     
     print(f"\nM-CSA Ground Truth: {sorted(true_set)}")
-    print(f"Predicted (Top {len(predicted)}): {predicted}")
+    print(f"Predicted (Top {len(predicted)}): {sorted(predicted)}")
     
     print("\n--- Detailed Analysis ---")
     
