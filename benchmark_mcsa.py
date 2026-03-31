@@ -62,7 +62,8 @@ def extract_mcsa_residues(mcsa_tsv: str, pdb_id: str, chain: str = None,
     
     # Parse chain_residues from matched rows
     for row in matched_rows:
-        residues_str = row['residues'].strip()
+        # Support both column names (depends on parse script version)
+        residues_str = (row.get('chain_residues') or row.get('residues') or '').strip()
         for token in residues_str.split(','):
             token = token.strip()
             if token == '-' or not token:
@@ -91,15 +92,19 @@ def extract_mcsa_residues(mcsa_tsv: str, pdb_id: str, chain: str = None,
 
 def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict,
                                 top_n: int = 5,
+                                conservation_threshold: float = None,
                                 exclude_gaps: bool = True,
                                 min_identity: float = 0.0) -> List[int]:
     """
-    Extract top N conserved positions mapped to PDB residue IDs.
+    Extract top conserved positions mapped to PDB residue IDs.
+    
+    Uses either top-N or conservation threshold for selection.
     
     Args:
         conservation_data: Conservation JSON
         alignment_mapping: Dict mapping alignment_column -> resid
-        top_n: Number of top positions
+        top_n: Number of top positions (ignored if threshold is set)
+        conservation_threshold: Min conservation score (overrides top_n)
         exclude_gaps: Filter high-gap positions
         min_identity: Minimum identity threshold
     
@@ -132,8 +137,13 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     # Sort by conservation score
     sorted_positions = sorted(filtered, key=lambda p: p['conservation'], reverse=True)
     
-    # Return resid values
-    return [p['resid'] for p in sorted_positions[:top_n]]
+    # Select by threshold or top-N
+    if conservation_threshold is not None:
+        selected = [p for p in sorted_positions if p['conservation'] >= conservation_threshold]
+        print(f"  Threshold {conservation_threshold}: {len(selected)} residues above cutoff")
+        return [p['resid'] for p in selected]
+    else:
+        return [p['resid'] for p in sorted_positions[:top_n]]
 
 def calculate_metrics(predicted: List[int], true_set: Set[int]) -> Dict[str, float]:
     """
@@ -167,10 +177,44 @@ def calculate_metrics(predicted: List[int], true_set: Set[int]) -> Dict[str, flo
         'n_true': len(true_set)
     }
 
+def _build_resid_lookup(conservation_data: Dict) -> Dict[int, Dict]:
+    """Build a lookup from auth_resid -> position data.
+    
+    Uses the 'resid' field that get_top_conserved_positions adds to each position.
+    Falls back to 'auth_resid' if present.
+    """
+    lookup = {}
+    for p in conservation_data['positions']:
+        resid = p.get('resid') or p.get('auth_resid')
+        if resid is not None:
+            lookup[resid] = p
+    return lookup
+
 def print_results(predicted: List[int], true_set: Set[int], metrics: Dict, 
-                 conservation_data: Dict):
+                 conservation_data: Dict, alignment_mapping: Dict = None):
     """Print detailed benchmarking results."""
     predicted_set = set(predicted)
+    
+    # Build resid -> position data lookup
+    resid_lookup = _build_resid_lookup(conservation_data)
+    
+    # Also build from alignment_mapping as fallback
+    if alignment_mapping:
+        col_to_resid = {}
+        resid_to_col = {}
+        for col_str, resid in alignment_mapping.items():
+            col_to_resid[int(col_str)] = resid
+            resid_to_col[resid] = int(col_str)
+        
+        # Fill in any missing entries
+        for p in conservation_data['positions']:
+            aln_col = p['position']
+            resid = col_to_resid.get(aln_col)
+            if resid is not None and resid not in resid_lookup:
+                resid_lookup[resid] = p
+    
+    def _get_pos_data(resid):
+        return resid_lookup.get(resid)
     
     print("\n" + "="*70)
     print("BASELINE PERFORMANCE: Top-N Conservation")
@@ -186,9 +230,9 @@ def print_results(predicted: List[int], true_set: Set[int], metrics: Dict,
     if tp_positions:
         print(f"\n✓ TRUE POSITIVES ({len(tp_positions)}):")
         for pos in sorted(tp_positions):
-            pos_data = next((p for p in conservation_data['positions'] if p['position'] == pos), None)
+            pos_data = _get_pos_data(pos)
             if pos_data:
-                print(f"   Position {pos} ({pos_data['consensus']}): "
+                print(f"   Residue {pos} ({pos_data['consensus']}): "
                       f"conservation={pos_data['conservation']:.4f}")
     
     # False Positives
@@ -196,9 +240,9 @@ def print_results(predicted: List[int], true_set: Set[int], metrics: Dict,
     if fp_positions:
         print(f"\n✗ FALSE POSITIVES ({len(fp_positions)}):")
         for pos in sorted(fp_positions):
-            pos_data = next((p for p in conservation_data['positions'] if p['position'] == pos), None)
+            pos_data = _get_pos_data(pos)
             if pos_data:
-                print(f"   Position {pos} ({pos_data['consensus']}): "
+                print(f"   Residue {pos} ({pos_data['consensus']}): "
                       f"conservation={pos_data['conservation']:.4f}")
     
     # False Negatives
@@ -206,11 +250,14 @@ def print_results(predicted: List[int], true_set: Set[int], metrics: Dict,
     if fn_positions:
         print(f"\n✗ FALSE NEGATIVES (Missed catalytic residues: {len(fn_positions)}):")
         for pos in sorted(fn_positions):
-            pos_data = next((p for p in conservation_data['positions'] if p['position'] == pos), None)
+            pos_data = _get_pos_data(pos)
             if pos_data:
-                print(f"   Position {pos} ({pos_data['consensus']}): "
+                rank = get_conservation_rank(conservation_data, pos, alignment_mapping)
+                print(f"   Residue {pos} ({pos_data['consensus']}): "
                       f"conservation={pos_data['conservation']:.4f}, "
-                      f"rank={get_conservation_rank(conservation_data, pos)}")
+                      f"rank={rank}")
+            else:
+                print(f"   Residue {pos}: not found in conservation data")
     
     print("\n--- Performance Metrics ---")
     print(f"Precision: {metrics['precision']:.3f} ({metrics['tp']}/{metrics['n_predicted']})")
@@ -221,13 +268,27 @@ def print_results(predicted: List[int], true_set: Set[int], metrics: Dict,
     print("This is your BASELINE. More complex models must beat this.")
     print("="*70)
 
-def get_conservation_rank(conservation_data: Dict, position: int) -> int:
-    """Get the rank of a position by conservation score."""
-    positions = conservation_data['positions']
-    sorted_pos = sorted(positions, key=lambda p: p['conservation'], reverse=True)
+def get_conservation_rank(conservation_data: Dict, resid: int, 
+                          alignment_mapping: Dict = None) -> int:
+    """Get the rank of a residue (auth_resid) by conservation score."""
+    # Build resid -> conservation score mapping
+    if alignment_mapping:
+        col_to_resid = {int(k): v for k, v in alignment_mapping.items()}
+    else:
+        col_to_resid = {}
     
-    for rank, pos in enumerate(sorted_pos, 1):
-        if pos['position'] == position:
+    # Pair each position with its resid
+    scored = []
+    for p in conservation_data['positions']:
+        r = p.get('resid') or p.get('auth_resid') or col_to_resid.get(p['position'])
+        if r is not None:
+            scored.append((r, p['conservation']))
+    
+    # Sort by conservation descending
+    scored.sort(key=lambda x: x[1], reverse=True)
+    
+    for rank, (r, _) in enumerate(scored, 1):
+        if r == resid:
             return rank
     return -1
 
@@ -242,7 +303,11 @@ def main():
     parser.add_argument('--chain', default=None, help='Chain letter to filter (default: all chains)')
     parser.add_argument('--include-homologues', action='store_true', default=False,
                         help='Also include homologue entries (default: references only)')
-    parser.add_argument('--top-n', type=int, default=5, help='Top N predictions')
+    parser.add_argument('--top-n', default='auto',
+                        help='Top N predictions. "auto" matches ground truth count (default: auto)')
+    parser.add_argument('--conservation-threshold', type=float, default=None,
+                        help='Conservation score threshold (overrides --top-n). '
+                             'E.g., 0.6 selects all residues with conservation >= 0.6')
     parser.add_argument('--exclude-gaps', action='store_true', default=True)
     parser.add_argument('--min-identity', type=float, default=0.0)
     parser.add_argument('--output', '-o', help='Save results to JSON file')
@@ -273,11 +338,22 @@ def main():
         print(f"ERROR: No M-CSA residues found for PDB {args.pdb_id}")
         sys.exit(1)
     
+    # Resolve top-n: auto = match ground truth count
+    if args.conservation_threshold is not None:
+        top_n = None  # threshold mode
+        print(f"  Using conservation threshold: {args.conservation_threshold}")
+    elif args.top_n == 'auto':
+        top_n = len(true_positions)
+        print(f"  Auto top-N: predicting {top_n} residues (matching ground truth count)")
+    else:
+        top_n = int(args.top_n)
+    
     # Get predictions
     predicted_positions = get_top_conserved_positions(
         conservation_data,
         alignment_mapping,
-        top_n=args.top_n,
+        top_n=top_n if top_n else len(true_positions),
+        conservation_threshold=args.conservation_threshold,
         exclude_gaps=args.exclude_gaps,
         min_identity=args.min_identity
     )
@@ -286,15 +362,16 @@ def main():
     metrics = calculate_metrics(predicted_positions, true_positions)
     
     # Print results
-    print_results(predicted_positions, true_positions, metrics, conservation_data)
+    print_results(predicted_positions, true_positions, metrics, conservation_data, alignment_mapping)
     
     # Save to file if requested
     if args.output:
         results = {
             'pdb_id': args.pdb_id,
-            'top_n': args.top_n,
+            'top_n': top_n,
+            'conservation_threshold': args.conservation_threshold,
             'mcsa_ground_truth': sorted(true_positions),
-            'predicted': predicted_positions,
+            'predicted': sorted(predicted_positions),
             'metrics': metrics,
             'parameters': {
                 'exclude_gaps': args.exclude_gaps,
