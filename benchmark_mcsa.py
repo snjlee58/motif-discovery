@@ -94,11 +94,17 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                                 top_n: int = 5,
                                 conservation_threshold: float = None,
                                 exclude_gaps: bool = True,
-                                min_identity: float = 0.0) -> List[int]:
+                                min_identity: float = 0.0,
+                                exclude_structural: bool = False,
+                                use_catalytic_propensity: bool = False,
+                                p2rank_scores: Dict = None) -> List[int]:
     """
     Extract top conserved positions mapped to PDB residue IDs.
     
     Uses either top-N or conservation threshold for selection.
+    Optionally weights conservation by catalytic propensity and P2Rank binding site scores.
+    
+    Combined score = conservation × propensity_weight × p2rank_weight
     
     Args:
         conservation_data: Conservation JSON
@@ -107,14 +113,31 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         conservation_threshold: Min conservation score (overrides top_n)
         exclude_gaps: Filter high-gap positions
         min_identity: Minimum identity threshold
+        exclude_structural: Hard-filter G, P, A (aggressive, not recommended)
+        use_catalytic_propensity: Weight scores by M-CSA catalytic propensity
+        p2rank_scores: Dict of {auth_resid: {"score": float, "probability": float, ...}}
+                       from parse_p2rank.py output
     
     Returns:
         List of PDB residue IDs (resid)
     """
+    # Catalytic propensity from M-CSA (Ribeiro et al. 2018, Ribeiro et al. 2020)
+    CATALYTIC_PROPENSITY = {
+        'H': 7.0, 'C': 4.0, 'D': 2.5, 'E': 2.5, 'K': 2.0,
+        'R': 1.5, 'S': 1.5, 'T': 1.2, 'Y': 1.5, 'N': 1.5,
+        'Q': 1.0, 'W': 0.8, 'F': 0.3, 'M': 0.5, 'I': 0.2,
+        'L': 0.2, 'V': 0.3, 'A': 0.3, 'G': 0.4, 'P': 0.2, 'X': 0.5,
+    }
+    
+    STRUCTURAL_AAS = {'G', 'P', 'A'}
+    
     positions = conservation_data['positions']
     
-    # Filter
+    # Filter and score
     filtered = []
+    n_structural_skipped = 0
+    n_p2rank_matched = 0
+    
     for pos in positions:
         if exclude_gaps and pos['gap_frequency'] > 0.5:
             continue
@@ -123,23 +146,74 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         if pos['consensus'] in ['X', '-']:
             continue
         
-        # Map alignment column to resid
-        aln_col = pos['position']
-        resid = alignment_mapping.get(str(aln_col))  # JSON keys are strings
-        
-        if resid is None:
-            # This alignment column has a gap in the query sequence
+        if exclude_structural and pos['consensus'] in STRUCTURAL_AAS:
+            n_structural_skipped += 1
             continue
         
-        pos['resid'] = resid  # Add for later reference
+        # Map alignment column to resid
+        aln_col = pos['position']
+        resid = alignment_mapping.get(str(aln_col))
+        
+        if resid is None:
+            continue
+        
+        pos['resid'] = resid
+        
+        # Start with base conservation score
+        score = pos['conservation']
+        
+        # Apply catalytic propensity weighting
+        if use_catalytic_propensity:
+            aa = pos['consensus'].upper()
+            propensity = CATALYTIC_PROPENSITY.get(aa, 0.5)
+            propensity_norm = min(propensity / 7.0, 1.0)
+            score *= (propensity_norm ** 0.5)
+        
+        # Apply P2Rank binding site weighting
+        if p2rank_scores:
+            p2rank_data = p2rank_scores.get(str(resid)) or p2rank_scores.get(resid)
+            if p2rank_data:
+                n_p2rank_matched += 1
+                if isinstance(p2rank_data, dict):
+                    p2rank_prob = p2rank_data.get('probability', 0.0)
+                else:
+                    p2rank_prob = float(p2rank_data)
+                
+                # P2Rank weight: shift so that even residues outside pockets
+                # get some base score (0.2), but pocket residues get boosted
+                # This avoids completely zeroing out true catalytic residues
+                # that P2Rank might miss
+                p2rank_weight = 0.2 + 0.8 * p2rank_prob
+                score *= p2rank_weight
+                pos['p2rank_probability'] = p2rank_prob
+            else:
+                # No P2Rank score — slight penalty but don't zero out
+                score *= 0.3
+                pos['p2rank_probability'] = None
+        
+        pos['combined_score'] = score
         filtered.append(pos)
     
-    # Sort by conservation score
-    sorted_positions = sorted(filtered, key=lambda p: p['conservation'], reverse=True)
+    if exclude_structural and n_structural_skipped > 0:
+        print(f"  Excluded {n_structural_skipped} structural residues (G, P, A)")
+    if p2rank_scores:
+        print(f"  P2Rank scores matched: {n_p2rank_matched}/{len(filtered)} residues")
+    
+    # Sort by combined score
+    sorted_positions = sorted(filtered, key=lambda p: p['combined_score'], reverse=True)
+    
+    # Log what signals are active
+    signals = []
+    if use_catalytic_propensity:
+        signals.append("catalytic propensity")
+    if p2rank_scores:
+        signals.append("P2Rank binding site")
+    if signals:
+        print(f"  Active signals: conservation + {' + '.join(signals)}")
     
     # Select by threshold or top-N
     if conservation_threshold is not None:
-        selected = [p for p in sorted_positions if p['conservation'] >= conservation_threshold]
+        selected = [p for p in sorted_positions if p['combined_score'] >= conservation_threshold]
         print(f"  Threshold {conservation_threshold}: {len(selected)} residues above cutoff")
         return [p['resid'] for p in selected]
     else:
@@ -309,6 +383,13 @@ def main():
                         help='Conservation score threshold (overrides --top-n). '
                              'E.g., 0.6 selects all residues with conservation >= 0.6')
     parser.add_argument('--exclude-gaps', action='store_true', default=True)
+    parser.add_argument('--exclude-structural', action='store_true', default=False,
+                        help='Hard-filter G, P, A residues (not recommended, use --catalytic-propensity instead)')
+    parser.add_argument('--catalytic-propensity', action='store_true', default=False,
+                        help='Weight conservation by M-CSA catalytic propensity (recommended). '
+                             'Boosts H, C, D, E; dampens G, P, A, hydrophobics.')
+    parser.add_argument('--p2rank-json', default=None,
+                        help='P2Rank scores JSON from parse_p2rank.py (binding site prediction)')
     parser.add_argument('--min-identity', type=float, default=0.0)
     parser.add_argument('--output', '-o', help='Save results to JSON file')
     
@@ -348,6 +429,15 @@ def main():
     else:
         top_n = int(args.top_n)
     
+    # Load P2Rank scores if provided
+    p2rank_scores = None
+    if args.p2rank_json:
+        print(f"Loading P2Rank scores: {args.p2rank_json}")
+        with open(args.p2rank_json) as f:
+            p2rank_data = json.load(f)
+            p2rank_scores = p2rank_data.get('residues', {})
+        print(f"  Loaded scores for {len(p2rank_scores)} residues")
+    
     # Get predictions
     predicted_positions = get_top_conserved_positions(
         conservation_data,
@@ -355,7 +445,10 @@ def main():
         top_n=top_n if top_n else len(true_positions),
         conservation_threshold=args.conservation_threshold,
         exclude_gaps=args.exclude_gaps,
-        min_identity=args.min_identity
+        min_identity=args.min_identity,
+        exclude_structural=args.exclude_structural,
+        use_catalytic_propensity=args.catalytic_propensity,
+        p2rank_scores=p2rank_scores
     )
     
     # Calculate metrics

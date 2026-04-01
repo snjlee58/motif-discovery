@@ -70,7 +70,8 @@ OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 # CLUSTER_FILE="$SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv"
 CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
-MAX_MEMBERS=200  # cap to keep FoldMason tractable
+MAX_MEMBERS=100  # cap to keep FoldMason tractable
+P2RANK_DIR="$SCRATCH/p2rank_2.5"  # Path to P2Rank installation
 
 #####################
 # STEP 0: Resolve UniProt ID if not provided
@@ -346,6 +347,34 @@ python3 map_alignment_to_pdb.py \
   -o $SCRATCH/$OUTDIR/alignment_mapping.json
 
 #####################
+# STEP 5b: P2Rank binding site prediction
+#####################
+echo ""
+echo "[5b] Running P2Rank binding site prediction..."
+
+P2RANK_JSON="$SCRATCH/$OUTDIR/p2rank_scores.json"
+PDB_FILE="$SCRATCH/${PDB_ID}.pdb"
+
+if [ -d "$P2RANK_DIR" ] && [ -f "$PDB_FILE" ]; then
+  $P2RANK_DIR/prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
+
+  # Find the residues CSV
+  P2RANK_CSV=$(find $SCRATCH/$OUTDIR/p2rank_output -name "*_residues.csv" | head -1)
+
+  if [ -n "$P2RANK_CSV" ]; then
+    python3 parse_p2rank.py "$P2RANK_CSV" -o "$P2RANK_JSON"
+    echo "  ✓ P2Rank scores saved to: p2rank_scores.json"
+  else
+    echo "  WARNING: P2Rank ran but no residues CSV found"
+    P2RANK_JSON=""
+  fi
+else
+  echo "  WARNING: P2Rank not found at $P2RANK_DIR or PDB file missing"
+  echo "  Skipping P2Rank. Install: cd \$SCRATCH && wget https://github.com/rdk/p2rank/releases/download/2.5/p2rank_2.5.tar.gz && tar xzf p2rank_2.5.tar.gz"
+  P2RANK_JSON=""
+fi
+
+#####################
 # STEP 6: Extract top conserved positions
 #####################
 echo ""
@@ -378,6 +407,12 @@ echo "[7] Benchmarking against M-CSA ground truth..."
 MCSA_FILE="$SCRATCH/m-csa/catalytic_residues_homologues_parsed.tsv"
 
 if [ -f "$MCSA_FILE" ]; then
+  # Build P2Rank argument if available
+  P2RANK_ARG=""
+  if [ -n "$P2RANK_JSON" ] && [ -f "$P2RANK_JSON" ]; then
+    P2RANK_ARG="--p2rank-json $P2RANK_JSON"
+  fi
+
   python3 benchmark_mcsa.py \
     $SCRATCH/$OUTDIR/${PDB_ID_LOWER}_conservation.json \
     $MCSA_FILE \
@@ -385,6 +420,8 @@ if [ -f "$MCSA_FILE" ]; then
     --pdb-id $PDB_ID_LOWER \
     --top-n auto \
     --exclude-gaps \
+    --catalytic-propensity \
+    $P2RANK_ARG \
     --min-identity 0.2 \
     --output $SCRATCH/$OUTDIR/baseline_performance.json
   
