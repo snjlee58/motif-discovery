@@ -404,7 +404,7 @@ python3 extract_top_conserved.py \
 echo ""
 echo "[7] Benchmarking against M-CSA ground truth..."
 
-MCSA_FILE="$SCRATCH/m-csa/catalytic_residues_homologues_parsed.tsv"
+MCSA_FILE="$SCRATCH/m-csa/catalytic_residues_separated_aligned.tsv"
 
 if [ -f "$MCSA_FILE" ]; then
   # Build P2Rank argument if available
