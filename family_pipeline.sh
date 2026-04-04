@@ -71,7 +71,6 @@ PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 # CLUSTER_FILE="$SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv"
 CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
 MAX_MEMBERS=100  # cap to keep FoldMason tractable
-P2RANK_DIR="$SCRATCH/p2rank_2.5"  # Path to P2Rank installation
 
 #####################
 # STEP 0: Resolve UniProt ID if not provided
@@ -355,8 +354,8 @@ echo "[5b] Running P2Rank binding site prediction..."
 P2RANK_JSON="$SCRATCH/$OUTDIR/p2rank_scores.json"
 PDB_FILE="$SCRATCH/${PDB_ID}.pdb"
 
-if [ -d "$P2RANK_DIR" ] && [ -f "$PDB_FILE" ]; then
-  $P2RANK_DIR/prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
+if command -v prank &>/dev/null && [ -f "$PDB_FILE" ]; then
+  prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
 
   # Find the residues CSV
   P2RANK_CSV=$(find $SCRATCH/$OUTDIR/p2rank_output -name "*_residues.csv" | head -1)
@@ -369,8 +368,8 @@ if [ -d "$P2RANK_DIR" ] && [ -f "$PDB_FILE" ]; then
     P2RANK_JSON=""
   fi
 else
-  echo "  WARNING: P2Rank not found at $P2RANK_DIR or PDB file missing"
-  echo "  Skipping P2Rank. Install: cd \$SCRATCH && wget https://github.com/rdk/p2rank/releases/download/2.5/p2rank_2.5.tar.gz && tar xzf p2rank_2.5.tar.gz"
+  echo "  WARNING: prank not found in PATH or PDB file missing"
+  echo "  Skipping P2Rank. Install and add to PATH."
   P2RANK_JSON=""
 fi
 
