@@ -121,12 +121,29 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     Returns:
         List of PDB residue IDs (resid)
     """
-    # Catalytic propensity from M-CSA (Ribeiro et al. 2018, Ribeiro et al. 2020)
+    # Catalytic propensity from M-CSA (Ribeiro et al. 2017)
     CATALYTIC_PROPENSITY = {
-        'H': 7.0, 'C': 4.0, 'D': 2.5, 'E': 2.5, 'K': 2.0,
-        'R': 1.5, 'S': 1.5, 'T': 1.2, 'Y': 1.5, 'N': 1.5,
-        'Q': 1.0, 'W': 0.8, 'F': 0.3, 'M': 0.5, 'I': 0.2,
-        'L': 0.2, 'V': 0.3, 'A': 0.3, 'G': 0.4, 'P': 0.2, 'X': 0.5,
+        'H': 8.01, # Histidine (His)
+        'C': 4.66, # Cysteine (Cys)
+        'D': 3.04, # Aspartic acid (Asp)
+        'E': 2.09, # Glutamic acid (Glu)
+        'K': 1.58, # Lysine (Lys)
+        'R': 1.81, # Arginine (Arg)
+        'S': 0.95, # Serine (Ser)
+        'T': 0.56, # Threonine (Thr)
+        'Y': 1.84, # Tyrosine (Tyr)
+        'N': 0.97, # Asparagine (Asn)
+        'Q': 0.48, # Glutamine (Gln)
+        'W': 1.03, # Tryptophan (Trp)
+        'F': 0.40, # Phenylalanine (Phe)
+        'M': 0.26, # Methionine (Met)
+        'I': 0.04, # Isoleucine (Ile)
+        'L': 0.04, # Leucine (Leu)
+        'V': 0.03, # Valine (Val)
+        'A': 0.01, # Alanine (Ala)
+        'G': 0.02, # Glycine (Gly)
+        'P': 0.03, # Proline (Pro)
+        'X': 0.5, # Unknown
     }
     
     STRUCTURAL_AAS = {'G', 'P', 'A'}
