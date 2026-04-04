@@ -8,10 +8,10 @@ set -euo pipefail
 #   bash batch_pipeline.sh <benchmark_list.tsv> [--resume]
 #
 # Generate the input list with:
-#   python3 generate_benchmark_list.py catalytic_residues_separated_aligned.tsv -o benchmark_list.tsv
+#   python3 generate_benchmark_list.py catalytic_residues_homologues_parsed.tsv -o benchmark_list.tsv
 #
 # For a pilot run:
-#   python3 generate_benchmark_list.py catalytic_residues_separated_aligned.tsv -o pilot_20.tsv --max 20 --shuffle
+#   python3 generate_benchmark_list.py catalytic_residues_homologues_parsed.tsv -o pilot_20.tsv --max 20 --shuffle
 
 TSV=${1:?"Usage: bash batch_pipeline.sh <benchmark_list.tsv>"}
 RESUME=${2:-""}  # Pass --resume to skip already-completed entries

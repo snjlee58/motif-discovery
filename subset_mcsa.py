@@ -8,7 +8,7 @@ Reads the parsed TSV and categorizes entries by:
   - Whether all residues are on one chain
 
 Usage:
-    python3 subset_mcsa.py <catalytic_residues_separated_aligned.tsv> [-o output_dir]
+    python3 subset_mcsa.py <catalytic_residues_homologues_parsed.tsv> [-o output_dir]
 """
 
 import csv

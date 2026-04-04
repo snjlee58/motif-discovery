@@ -2,7 +2,7 @@
 """
 Benchmark conservation-based motif predictions against M-CSA ground truth.
 
-Uses the parsed TSV from parse_catalytic_residues_merged.py (catalytic_residues_separated_aligned.tsv).
+Uses the parsed TSV from parse_catalytic_residues_merged.py (catalytic_residues_homologues_parsed.tsv).
 
 Usage:
     python3 benchmark_mcsa.py <conservation_json> <mcsa_tsv> <mapping_json> --pdb-id 1btl --top-n 5

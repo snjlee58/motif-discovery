@@ -6,7 +6,10 @@ Extracts all is_reference=True entries and outputs a TSV with:
   mcsa_id  pdb_id  n_catalytic_residues
 
 Usage:
-    python3 generate_benchmark_list.py <catalytic_residues_separated_aligned.tsv> [-o benchmark_list.tsv] [--max N]
+    python3 generate_benchmark_list.py <ccatalytic_residues_homologues_parsed.tsv> [-o benchmark_list.tsv] [--max N]
+
+Example:   
+    python3 generate_benchmark_list.py ../m-csa/mcsa_monomeric.tsv -o pilot_20.tsv --max 20 --shuffle
 """
 
 import csv
