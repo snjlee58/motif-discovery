@@ -89,11 +89,10 @@ print(f\"$MCSA_ID\t$PDB_UPPER\t$N_RES\tSUCCESS\t{m['precision']:.4f}\t{m['recall
 
     # Run pipeline with timing
     echo "  Running family_pipeline.sh..."
-    START_TIME=$(date +%s)
 
     if (cd "$MOTIF_DIR" && bash family_pipeline.sh "$PDB_UPPER" "" "$OUTDIR" --quiet); then
-        END_TIME=$(date +%s)
-        ELAPSED=$((END_TIME - START_TIME))
+        ELAPSED=$(grep "^ELAPSED_SECONDS=" "$SCRATCH/$OUTDIR/pipeline.log" 2>/dev/null | tail -1 | cut -d= -f2)
+        ELAPSED=${ELAPSED:-"?"}
         echo "  ✓ Pipeline completed (${ELAPSED}s)"
 
         # Extract metrics from baseline_performance.json
@@ -112,9 +111,10 @@ print(f\"$MCSA_ID\t$PDB_UPPER\t$N_RES\tSUCCESS\t{m['precision']:.4f}\t{m['recall
             FAILED=$((FAILED + 1))
         fi
     else
-        END_TIME=$(date +%s)
-        ELAPSED=$((END_TIME - START_TIME))
-        echo "  ✗ Pipeline failed in ${ELAPSED}s (check $LOG_FILE)"
+        ELAPSED=$(grep "^ELAPSED_SECONDS=" "$SCRATCH/$OUTDIR/pipeline.log" 2>/dev/null | tail -1 | cut -d= -f2)
+        ELAPSED=${ELAPSED:-"?"}
+        echo "  ✗ Pipeline failed"
+
         # Try to capture the error
         ERROR_MSG=$(tail -1 "$LOG_FILE" 2>/dev/null | tr '\t' ' ' | head -c 100)
         echo -e "$MCSA_ID\t$PDB_UPPER\t$N_RES\tFAILED\t\t\t\t\t\t${ELAPSED}\t${ERROR_MSG}" >> "$SUMMARY_FILE"

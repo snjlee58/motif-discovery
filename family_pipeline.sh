@@ -60,17 +60,29 @@ set -euo pipefail
 #   bash family_pipeline.sh 1BTL P62593
 #   bash family_pipeline.sh 1BTL P62593 250212_family_1btl
 
+PIPELINE_START=$(date +%s)
+
 #####################
 # ARGUMENTS
 #####################
 PDB_ID=${1:?"Usage: bash family_pipeline.sh <pdb_id> [uniprot_id] [output_dir]"}
 UNIPROT_ID=${2:-""}
 OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
+QUIET=${4:-""}
 
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
-# CLUSTER_FILE="$SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv"
 CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
-MAX_MEMBERS=100  # cap to keep FoldMason tractable
+MAX_MEMBERS=100
+
+# Set up logging
+mkdir -p $SCRATCH/$OUTDIR
+LOG_FILE="$SCRATCH/$OUTDIR/pipeline.log"
+
+if [ "$QUIET" = "--quiet" ]; then
+    exec > "$LOG_FILE" 2>&1
+else
+    exec > >(tee "$LOG_FILE") 2>&1
+fi
 
 #####################
 # STEP 0: Resolve UniProt ID if not provided
@@ -156,18 +168,6 @@ else:
     exit 1
   fi
   echo "  Resolved: $PDB_ID -> $UNIPROT_ID"
-fi
-
-# Check for --quiet flag (passed as 4th argument)
-QUIET=${4:-""}
-
-mkdir -p $SCRATCH/$OUTDIR
-LOG_FILE="$SCRATCH/$OUTDIR/pipeline.log"
-
-if [ "$QUIET" = "--quiet" ]; then
-    exec > "$LOG_FILE" 2>&1
-else
-    exec > >(tee "$LOG_FILE") 2>&1
 fi
 
 echo "============================================"
@@ -459,3 +459,9 @@ echo "  top5_motif.txt            - top 5 conserved positions"
 echo "  top10_motif.txt           - top 10 conserved positions"
 echo "  baseline_performance.json - M-CSA benchmark results (if available)"
 echo "============================================"
+
+
+PIPELINE_END=$(date +%s)
+PIPELINE_ELAPSED=$((PIPELINE_END - PIPELINE_START))
+echo "Total time: ${PIPELINE_ELAPSED}s"
+echo "ELAPSED_SECONDS=$PIPELINE_ELAPSED"
