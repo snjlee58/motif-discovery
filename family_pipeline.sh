@@ -158,7 +158,18 @@ else:
   echo "  Resolved: $PDB_ID -> $UNIPROT_ID"
 fi
 
+# Check for --quiet flag (passed as 4th argument)
+QUIET=${4:-""}
+
 mkdir -p $SCRATCH/$OUTDIR
+LOG_FILE="$SCRATCH/$OUTDIR/pipeline.log"
+
+if [ "$QUIET" = "--quiet" ]; then
+    exec > "$LOG_FILE" 2>&1
+else
+    exec > >(tee "$LOG_FILE") 2>&1
+fi
+
 echo "============================================"
 echo "Family View Pipeline"
 echo "  UniProt:    $UNIPROT_ID"

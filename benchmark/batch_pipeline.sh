@@ -91,7 +91,7 @@ print(f\"$MCSA_ID\t$PDB_UPPER\t$N_RES\tSUCCESS\t{m['precision']:.4f}\t{m['recall
     echo "  Running family_pipeline.sh..."
     START_TIME=$(date +%s)
 
-    if (cd "$MOTIF_DIR" && bash family_pipeline.sh "$PDB_UPPER" "" "$OUTDIR") > "$LOG_FILE" 2>&1; then
+    if (cd "$MOTIF_DIR" && bash family_pipeline.sh "$PDB_UPPER" "" "$OUTDIR" --quiet); then
         END_TIME=$(date +%s)
         ELAPSED=$((END_TIME - START_TIME))
         echo "  ✓ Pipeline completed (${ELAPSED}s)"
