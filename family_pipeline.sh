@@ -428,6 +428,7 @@ if [ -f "$MCSA_FILE" ]; then
     $MCSA_FILE \
     $SCRATCH/$OUTDIR/alignment_mapping.json \
     --pdb-id $PDB_ID_LOWER \
+    --pdb-file $SCRATCH/${PDB_ID}.pdb \
     --top-n auto \
     --exclude-gaps \
     --catalytic-propensity \

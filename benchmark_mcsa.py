@@ -9,9 +9,98 @@ Usage:
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import List, Set, Dict, Tuple
+
+
+def parse_ca_coordinates(pdb_file: str) -> Dict[int, Tuple[float, float, float]]:
+    """
+    Parse CA (alpha carbon) coordinates from a PDB file.
+    
+    Returns:
+        Dict mapping auth_resid -> (x, y, z) coordinates
+    """
+    coords = {}
+    with open(pdb_file) as f:
+        for line in f:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            atom_name = line[12:16].strip()
+            if atom_name != "CA":
+                continue
+            try:
+                resid = int(line[22:26].strip())
+                x = float(line[30:38])
+                y = float(line[38:46])
+                z = float(line[46:54])
+                # Keep first occurrence (in case of alt conformations)
+                if resid not in coords:
+                    coords[resid] = (x, y, z)
+            except (ValueError, IndexError):
+                continue
+    return coords
+
+
+def compute_spatial_clustering(candidates: List[Dict], ca_coords: Dict[int, Tuple],
+                               radius: float = 15.0, top_fraction: int = 3) -> Dict[int, float]:
+    """
+    Compute spatial clustering score for candidate residues.
+    
+    For each candidate, count how many other high-scoring candidates are
+    within `radius` Angstroms. Normalize to [0, 1].
+    
+    This is a two-pass approach:
+      1. Take the top N*top_fraction candidates by preliminary score
+      2. For each, count neighbors within radius among this pool
+      3. Normalize: cluster_score = neighbor_count / max_neighbor_count
+    
+    Args:
+        candidates: List of position dicts with 'resid' and 'combined_score'
+        ca_coords: Dict mapping resid -> (x, y, z)
+        radius: Distance cutoff in Angstroms for "nearby"
+        top_fraction: Consider top N*this candidates for clustering pool
+    
+    Returns:
+        Dict mapping resid -> clustering score [0, 1]
+    """
+    if not candidates or not ca_coords:
+        return {}
+    
+    # Get coordinates for candidates that have them
+    candidates_with_coords = []
+    for c in candidates:
+        resid = c['resid']
+        if resid in ca_coords:
+            candidates_with_coords.append((resid, ca_coords[resid]))
+    
+    if len(candidates_with_coords) < 2:
+        return {}
+    
+    # Count neighbors within radius for each candidate
+    neighbor_counts = {}
+    for i, (res_i, coord_i) in enumerate(candidates_with_coords):
+        count = 0
+        for j, (res_j, coord_j) in enumerate(candidates_with_coords):
+            if i == j:
+                continue
+            dist = math.sqrt(
+                (coord_i[0] - coord_j[0]) ** 2 +
+                (coord_i[1] - coord_j[1]) ** 2 +
+                (coord_i[2] - coord_j[2]) ** 2
+            )
+            if dist <= radius:
+                count += 1
+        neighbor_counts[res_i] = count
+    
+    # Normalize to [0, 1]
+    max_count = max(neighbor_counts.values()) if neighbor_counts else 1
+    if max_count == 0:
+        return {r: 0.0 for r in neighbor_counts}
+    
+    return {r: count / max_count for r, count in neighbor_counts.items()}
+
 
 def extract_mcsa_residues(mcsa_tsv: str, pdb_id: str, chain: str = None,
                           references_only: bool = True) -> Set[int]:
@@ -97,14 +186,17 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                                 min_identity: float = 0.0,
                                 exclude_structural: bool = False,
                                 use_catalytic_propensity: bool = False,
-                                p2rank_scores: Dict = None) -> List[int]:
+                                p2rank_scores: Dict = None,
+                                pdb_file: str = None) -> List[int]:
     """
     Extract top conserved positions mapped to PDB residue IDs.
     
     Uses either top-N or conservation threshold for selection.
-    Optionally weights conservation by catalytic propensity and P2Rank binding site scores.
+    Combined score = w1*conservation + w2*p2rank + w3*propensity + w4*clustering
     
-    Combined score = w1*conservation + w2*p2rank + w3*propensity
+    Two-pass approach:
+      Pass 1: Score with conservation + propensity + p2rank
+      Pass 2: Compute spatial clustering among top candidates, add as bonus, re-rank
     
     Args:
         conservation_data: Conservation JSON
@@ -117,6 +209,7 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         use_catalytic_propensity: Weight scores by M-CSA catalytic propensity
         p2rank_scores: Dict of {auth_resid: {"score": float, "probability": float, ...}}
                        from parse_p2rank.py output
+        pdb_file: Path to PDB file for spatial clustering (optional)
     
     Returns:
         List of PDB residue IDs (resid)
@@ -225,7 +318,42 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     if p2rank_scores:
         print(f"  P2Rank scores matched: {n_p2rank_matched}/{len(filtered)} residues")
     
-    # Sort by combined score
+    # === PASS 1: Sort by preliminary score (conservation + propensity + p2rank) ===
+    sorted_pass1 = sorted(filtered, key=lambda p: p['combined_score'], reverse=True)
+    
+    # === PASS 2: Spatial clustering bonus ===
+    W_CLUSTERING = 0.30
+    
+    if pdb_file and Path(pdb_file).exists():
+        ca_coords = parse_ca_coordinates(pdb_file)
+        
+        # Take top candidates for clustering pool (3x top_n, or top 30, whichever is larger)
+        pool_size = max((top_n or 10) * 3, 30)
+        pool = sorted_pass1[:pool_size]
+        
+        clustering_scores = compute_spatial_clustering(pool, ca_coords, radius=15.0)
+        
+        if clustering_scores:
+            n_clustered = sum(1 for s in clustering_scores.values() if s > 0)
+            print(f"  Spatial clustering: {n_clustered}/{len(clustering_scores)} residues have neighbors within 15Å")
+            
+            # Add clustering bonus and recompute combined score
+            for pos in filtered:
+                resid = pos['resid']
+                s_cluster = clustering_scores.get(resid, 0.0)
+                pos['cluster_score'] = s_cluster
+                pos['combined_score'] = pos['combined_score'] + W_CLUSTERING * s_cluster
+        else:
+            print(f"  Spatial clustering: no coordinates found, skipping")
+            for pos in filtered:
+                pos['cluster_score'] = 0.0
+    else:
+        if pdb_file:
+            print(f"  Spatial clustering: PDB file not found ({pdb_file}), skipping")
+        for pos in filtered:
+            pos['cluster_score'] = 0.0
+    
+    # === Final sort after clustering ===
     sorted_positions = sorted(filtered, key=lambda p: p['combined_score'], reverse=True)
     
     # Log what signals are active
@@ -234,6 +362,8 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         signals.append("catalytic propensity")
     if p2rank_scores:
         signals.append("P2Rank binding site")
+    if pdb_file and Path(pdb_file).exists():
+        signals.append("spatial clustering")
     if signals:
         print(f"  Active signals: conservation + {' + '.join(signals)}")
     
@@ -416,6 +546,8 @@ def main():
                              'Boosts H, C, D, E; dampens G, P, A, hydrophobics.')
     parser.add_argument('--p2rank-json', default=None,
                         help='P2Rank scores JSON from parse_p2rank.py (binding site prediction)')
+    parser.add_argument('--pdb-file', default=None,
+                        help='Path to PDB file for spatial clustering (optional)')
     parser.add_argument('--min-identity', type=float, default=0.0)
     parser.add_argument('--output', '-o', help='Save results to JSON file')
     
@@ -474,7 +606,8 @@ def main():
         min_identity=args.min_identity,
         exclude_structural=args.exclude_structural,
         use_catalytic_propensity=args.catalytic_propensity,
-        p2rank_scores=p2rank_scores
+        p2rank_scores=p2rank_scores,
+        pdb_file=args.pdb_file
     )
     
     # Calculate metrics
