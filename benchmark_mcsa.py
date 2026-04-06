@@ -104,7 +104,7 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     Uses either top-N or conservation threshold for selection.
     Optionally weights conservation by catalytic propensity and P2Rank binding site scores.
     
-    Combined score = conservation × propensity_weight × p2rank_weight
+    Combined score = w1*conservation + w2*p2rank + w3*propensity
     
     Args:
         conservation_data: Conservation JSON
@@ -176,17 +176,23 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         
         pos['resid'] = resid
         
-        # Start with base conservation score
-        score = pos['conservation']
+        # === ADDITIVE SCORING ===
+        # Each signal normalized to [0, 1], combined additively
         
-        # Apply catalytic propensity weighting
+        # Signal 1: Conservation (already 0-1)
+        s_conservation = pos['conservation']
+        
+        # Signal 2: Catalytic propensity
+        s_propensity = 0.0
         if use_catalytic_propensity:
             aa = pos['consensus'].upper()
             propensity = CATALYTIC_PROPENSITY.get(aa, 0.5)
-            propensity_norm = min(propensity / 7.0, 1.0)
-            score *= (propensity_norm ** 0.5)
+            # Normalize: max propensity is ~8.01 (His)
+            s_propensity = min(propensity / 8.01, 1.0)
+            pos['catalytic_propensity'] = propensity
         
-        # Apply P2Rank binding site weighting
+        # Signal 3: P2Rank binding site probability
+        s_p2rank = 0.0
         if p2rank_scores:
             p2rank_data = p2rank_scores.get(str(resid)) or p2rank_scores.get(resid)
             if p2rank_data:
@@ -195,18 +201,21 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                     p2rank_prob = p2rank_data.get('probability', 0.0)
                 else:
                     p2rank_prob = float(p2rank_data)
-                
-                # P2Rank weight: shift so that even residues outside pockets
-                # get some base score (0.2), but pocket residues get boosted
-                # This avoids completely zeroing out true catalytic residues
-                # that P2Rank might miss
-                p2rank_weight = 0.2 + 0.8 * p2rank_prob
-                score *= p2rank_weight
+                s_p2rank = p2rank_prob  # already 0-1
                 pos['p2rank_probability'] = p2rank_prob
             else:
-                # No P2Rank score — slight penalty but don't zero out
-                score *= 0.3
+                # No P2Rank data for this residue — leave at 0, don't penalize
                 pos['p2rank_probability'] = None
+        
+        # Weighted additive combination
+        # Conservation is the backbone, other signals boost
+        W_CONSERVATION = 1.0
+        W_P2RANK = 0.35
+        W_PROPENSITY = 0.25
+        
+        score = (W_CONSERVATION * s_conservation
+                 + W_P2RANK * s_p2rank
+                 + W_PROPENSITY * s_propensity)
         
         pos['combined_score'] = score
         filtered.append(pos)
