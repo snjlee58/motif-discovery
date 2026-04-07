@@ -72,7 +72,6 @@ QUIET=${4:-""}
 
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
-MAX_MEMBERS=100
 
 # Set up logging
 mkdir -p $SCRATCH/$OUTDIR
@@ -229,21 +228,8 @@ grep "^${REP_ID}" "$CLUSTER_FILE" | cut -f2 > $SCRATCH/$OUTDIR/cluster_members_a
 N_TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members_all.txt)
 echo "  Total cluster members: $N_TOTAL"
 
-
-
-
-# Cap the number of members
-if [ "$N_TOTAL" -gt "$MAX_MEMBERS" ]; then
-  echo "  Capping to $MAX_MEMBERS members (random sample + ensuring query is included)"
-  # Keep query, randomly sample the rest
-  grep -v "^${UNIPROT_ID}$" $SCRATCH/$OUTDIR/cluster_members_all.txt | shuf | head -n $((MAX_MEMBERS - 1)) > $SCRATCH/$OUTDIR/cluster_members.txt || true
-  echo "$UNIPROT_ID" >> $SCRATCH/$OUTDIR/cluster_members.txt
-else
-  cp $SCRATCH/$OUTDIR/cluster_members_all.txt $SCRATCH/$OUTDIR/cluster_members.txt
-fi
-
-N_MEMBERS=$(wc -l < $SCRATCH/$OUTDIR/cluster_members.txt)
-echo "  Using $N_MEMBERS members"
+cp $SCRATCH/$OUTDIR/cluster_members_all.txt $SCRATCH/$OUTDIR/cluster_members.txt
+echo "  Using $N_TOTAL members"
 
 #####################
 # STEP 2: Download AlphaFold structures for cluster members
