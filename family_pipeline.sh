@@ -270,7 +270,7 @@ fi
 echo "  DEBUG: finished download loop"
 
 # Add the experimental PDB structure for the query
-PDB_FILE="$SCRATCH/${PDB_ID}.pdb"
+PDB_FILE="$SCRATCH/pdb_files/${PDB_ID}.pdb"
 if [ ! -f "$PDB_FILE" ]; then
   echo "  Downloading $PDB_ID from RCSB..."
   wget -q --timeout=30 \
@@ -292,7 +292,7 @@ N_STRUCTURES=$(find $SCRATCH/$OUTDIR/structures -name "*.pdb" -o -name "*.cif" |
 echo "  Total structures for alignment: $N_STRUCTURES"
 
 # # Add the experimental PDB structure for the query
-# cp $SCRATCH/${PDB_ID}.pdb $SCRATCH/$OUTDIR/structures/ 2>/dev/null || true
+# cp $SCRATCH/pdb_files/${PDB_ID}.pdb $SCRATCH/$OUTDIR/structures/ 2>/dev/null || true
 
 # N_STRUCTURES=$(ls $SCRATCH/$OUTDIR/structures/*.pdb $SCRATCH/$OUTDIR/structures/*.cif 2>/dev/null | wc -l)
 # echo "  Total structures for alignment: $N_STRUCTURES"
@@ -338,7 +338,7 @@ echo "[5] Mapping alignment columns to PDB residue IDs..."
 python3 map_alignment_to_pdb.py \
   $MSA_FILE \
   $PDB_ID \
-  --pdb-file $SCRATCH/${PDB_ID}.pdb \
+  --pdb-file $SCRATCH/pdb_files/${PDB_ID}.pdb \
   --uniprot $UNIPROT_ID \
   -o $SCRATCH/$OUTDIR/alignment_mapping.json
 
@@ -349,7 +349,7 @@ echo ""
 echo "[5b] Running P2Rank binding site prediction..."
 
 P2RANK_JSON="$SCRATCH/$OUTDIR/p2rank_scores.json"
-PDB_FILE="$SCRATCH/${PDB_ID}.pdb"
+PDB_FILE="$SCRATCH/pdb_files/${PDB_ID}.pdb"
 
 if command -v prank &>/dev/null && [ -f "$PDB_FILE" ]; then
   prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
@@ -414,7 +414,7 @@ if [ -f "$MCSA_FILE" ]; then
     $MCSA_FILE \
     $SCRATCH/$OUTDIR/alignment_mapping.json \
     --pdb-id $PDB_ID_LOWER \
-    --pdb-file $SCRATCH/${PDB_ID}.pdb \
+    --pdb-file $SCRATCH/pdb_files/${PDB_ID}.pdb \
     --top-n auto \
     --exclude-gaps \
     --catalytic-propensity \

@@ -59,7 +59,7 @@ cat "$TMPFILE" | parallel --progress -j "$N_JOBS" '
     CONS="$DIR/${PDB_LOWER}_conservation.json"
     MAP="$DIR/alignment_mapping.json"
     P2RANK="$DIR/p2rank_scores.json"
-    PDB_FILE="'"$SCRATCH"'/${PDB_ID}.pdb"
+    PDB_FILE="'"$SCRATCH"'/pdb_files/${PDB_ID}.pdb"
     MCSA="'"$MCSA_FILE"'"
     OUTDIR="'"$RESULTS_DIR"'"
     
