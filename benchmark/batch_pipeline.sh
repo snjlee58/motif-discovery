@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Batch benchmarking pipeline
-# Runs family_pipeline.sh for each M-CSA reference entry and collects results.
+# Runs pipeline.sh for each M-CSA reference entry and collects results.
 #
 # Usage:
 #   bash batch_pipeline.sh <benchmark_list.tsv> [--resume]
@@ -88,9 +88,9 @@ print(f\"$MCSA_ID\t$PDB_UPPER\t$N_RES\tSUCCESS\t{m['precision']:.4f}\t{m['recall
     fi
 
     # Run pipeline with timing
-    echo "  Running family_pipeline.sh..."
+    echo "  Running pipeline.sh..."
 
-    if (cd "$MOTIF_DIR" && bash family_pipeline.sh "$PDB_UPPER" "" "$OUTDIR" --quiet); then
+    if (cd "$MOTIF_DIR" && bash pipeline.sh "$PDB_UPPER" "" "$OUTDIR" --quiet); then
         ELAPSED=$(grep "^ELAPSED_SECONDS=" "$SCRATCH/$OUTDIR/pipeline.log" 2>/dev/null | tail -1 | cut -d= -f2)
         ELAPSED=${ELAPSED:-"?"}
         echo "  ✓ Pipeline completed (${ELAPSED}s)"

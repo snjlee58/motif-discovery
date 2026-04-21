@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Run full pipeline on all representative monomers in parallel.
-# This runs family_pipeline.sh for each entry (downloads, FoldMason, conservation, benchmark).
+# This runs pipeline.sh for each entry (downloads, FoldMason, conservation, benchmark).
 # Only need to rerun this when the pipeline itself changes (not for scoring tweaks).
 #
 # Usage:
@@ -31,7 +31,7 @@ echo "============================================"
 
 tail -n +2 "$BENCHMARK_TSV" | \
     parallel --progress -j "$N_JOBS" --colsep '\t' \
-    'cd ~/motif && bash family_pipeline.sh {2} "" batch_family_{2} --quiet'
+    'cd ~/motif && bash pipeline.sh {2} "" batch_family_{2} --quiet'
 
 echo ""
 echo "Done! Results in \$SCRATCH/batch_family_*/"

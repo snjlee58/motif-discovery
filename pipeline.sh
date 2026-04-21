@@ -29,13 +29,13 @@ set -euo pipefail
 # gunzip $SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
 
 # Usage:
-#   bash family_pipeline.sh <pdb_id> [uniprot_id] [output_dir]
+#   bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]
 #   If uniprot_id is omitted, it will be resolved automatically via UniProt ID Mapping API.
 #
 # Examples:
-#   bash family_pipeline.sh 1BTL
-#   bash family_pipeline.sh 1BTL P62593
-#   bash family_pipeline.sh 1BTL P62593 250212_family_1btl
+#   bash pipeline.sh 1BTL
+#   bash pipeline.sh 1BTL P62593
+#   bash pipeline.sh 1BTL P62593 250212_family_1btl
 
 
 
@@ -53,19 +53,19 @@ set -euo pipefail
 #      wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
 #
 # Usage:
-#   bash family_pipeline.sh <pdb_id> [uniprot_id] [output_dir]
+#   bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]
 #
 # Examples:
-#   bash family_pipeline.sh 1BTL
-#   bash family_pipeline.sh 1BTL P62593
-#   bash family_pipeline.sh 1BTL P62593 250212_family_1btl
+#   bash pipeline.sh 1BTL
+#   bash pipeline.sh 1BTL P62593
+#   bash pipeline.sh 1BTL P62593 250212_family_1btl
 
 PIPELINE_START=$(date +%s)
 
 #####################
 # ARGUMENTS
 #####################
-PDB_ID=${1:?"Usage: bash family_pipeline.sh <pdb_id> [uniprot_id] [output_dir]"}
+PDB_ID=${1:?"Usage: bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]"}
 UNIPROT_ID=${2:-""}
 OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 QUIET=${4:-""}
@@ -163,7 +163,7 @@ else:
     echo "ERROR: Could not resolve UniProt ID for PDB $PDB_ID"
     echo "  Debug: last raw response from API:"
     echo "  $RESULT_RAW" | head -5
-    echo "  Try providing it manually: bash family_pipeline.sh $PDB_ID <uniprot_id>"
+    echo "  Try providing it manually: bash pipeline.sh $PDB_ID <uniprot_id>"
     exit 1
   fi
   echo "  Resolved: $PDB_ID -> $UNIPROT_ID"
@@ -328,7 +328,7 @@ echo "  Alignment length: $ALN_LEN"
 #####################
 echo ""
 echo "[4] Running conservation scoring..."
-python3 pipeline.py $SCRATCH/$OUTDIR $MSA_FILE $PDB_ID_LOWER
+python3 score_conservation.py $SCRATCH/$OUTDIR $MSA_FILE $PDB_ID_LOWER
 
 #####################
 # STEP 5: Create alignment mapping

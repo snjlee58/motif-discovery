@@ -1,4 +1,4 @@
-# python3 pipeline.py $SCRATCH/foldmason_result_aa.fa "$SCRATCH/conservation_scores"
+# python3 score_conservation.py $SCRATCH/foldmason_result_aa.fa "$SCRATCH/conservation_scores"
 
 import sys
 from pathlib import Path
