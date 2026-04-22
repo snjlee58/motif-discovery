@@ -1,6 +1,14 @@
 """
-Filter M-CSA database entries for monomeric, single-chain protein structures
-by querying the RCSB PDB Search API.
+Filter M-CSA database entries for biological monomers (exactly 1 polymer chain
+in the biological assembly, a single protein entity, no DNA/RNA) by querying
+the RCSB PDB Data API per-entry.
+
+Why per-entry instead of one Search API call? The Search API's entry-level
+attributes can't distinguish deposited-ASU chain count from biological-assembly
+chain count. Homodimers crystallized with 1 chain/ASU would pass a
+deposited-count filter, and true monomers deposited with NCS copies would fail
+it. The Data API's /assembly/{pdb}/1 endpoint reports the correct biological
+chain count, so we verify each M-CSA entry directly.
 
 Usage:
     python filter_mcsa_monomeric.py --input mcsa_parsed.tsv --output mcsa_monomeric.tsv
@@ -14,97 +22,87 @@ import csv
 import json
 import random
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
+ENTRY_URL = "https://data.rcsb.org/rest/v1/core/entry"
+ASSEMBLY_URL = "https://data.rcsb.org/rest/v1/core/assembly"
 
 
-def get_monomeric_protein_pdb_ids() -> set:
+def is_biological_monomer(pdb_id: str) -> bool:
     """
-    Query RCSB Search API for all PDB entries where:
-      1. Exactly 1 protein entity (one unique protein sequence)
-      2. Exactly 1 polymer chain deposited in the coordinates
-      3. No DNA or RNA entities
+    Return True iff `pdb_id` meets all of:
+      - biological assembly (assembly 1) has exactly 1 polymer chain instance
+      - exactly 1 protein entity
+      - no DNA or RNA entities
 
-    We use entry-level attributes only. `rcsb_struct_symmetry.oligomeric_state`
-    would be stricter (biological-assembly monomer) but is a nested-array field
-    that returns empty results via simple operators — for M-CSA reference
-    structures the deposited coords usually match the biological assembly, so
-    entry-level filtering is a good-enough proxy.
-
-    Returns a set of uppercase PDB IDs.
+    Makes two Data API calls (entry + assembly/1). Returns False on any failure
+    so transient network errors don't corrupt the output — rerun to retry.
     """
-    query = {
-        "query": {
-            "type": "group",
-            "logical_operator": "and",
-            "nodes": [
-                {
-                    "type": "terminal",
-                    "service": "text",
-                    "parameters": {
-                        "attribute": "rcsb_entry_info.polymer_entity_count_protein",
-                        "operator": "equals",
-                        "value": 1
-                    }
-                },
-                {
-                    "type": "terminal",
-                    "service": "text",
-                    "parameters": {
-                        "attribute": "rcsb_entry_info.deposited_polymer_entity_instance_count",
-                        "operator": "equals",
-                        "value": 1
-                    }
-                },
-                {
-                    "type": "terminal",
-                    "service": "text",
-                    "parameters": {
-                        "attribute": "rcsb_entry_info.polymer_entity_count_DNA",
-                        "operator": "equals",
-                        "value": 0
-                    }
-                },
-                {
-                    "type": "terminal",
-                    "service": "text",
-                    "parameters": {
-                        "attribute": "rcsb_entry_info.polymer_entity_count_RNA",
-                        "operator": "equals",
-                        "value": 0
-                    }
-                }
-            ]
-        },
-        "return_type": "entry",
-        "request_options": {
-            "return_all_hits": True
-        }
-    }
+    session = _session()
+    try:
+        entry_resp = session.get(f"{ENTRY_URL}/{pdb_id}", timeout=30)
+        if entry_resp.status_code != 200:
+            return False
+        info = entry_resp.json().get("rcsb_entry_info", {})
+        if info.get("polymer_entity_count_protein") != 1:
+            return False
+        if info.get("polymer_entity_count_DNA", 0) != 0:
+            return False
+        if info.get("polymer_entity_count_RNA", 0) != 0:
+            return False
 
-    print("Querying RCSB Search API for monomeric protein entries...")
-    resp = requests.post(SEARCH_URL, json=query, timeout=120)
-    print(f"HTTP {resp.status_code}")
+        asm_resp = session.get(f"{ASSEMBLY_URL}/{pdb_id}/1", timeout=30)
+        if asm_resp.status_code != 200:
+            return False
+        asm_info = asm_resp.json().get("rcsb_assembly_info", {})
+        return asm_info.get("polymer_entity_instance_count") == 1
+    except requests.RequestException:
+        return False
 
-    # RCSB returns 204 No Content when the query is valid but matches zero entries.
-    if resp.status_code == 204:
-        print("WARNING: query returned zero hits — check attribute names/values")
-        return set()
-    if resp.status_code != 200:
-        print(f"Response: {resp.text[:500]}")
-        raise RuntimeError(f"RCSB Search API failed with HTTP {resp.status_code}")
 
-    data = resp.json()
-    total = data.get("total_count", 0)
-    print(f"Total monomeric protein entries: {total}")
+# One session per thread — lets urllib3 reuse HTTP connections.
+import threading
+_thread_local = threading.local()
+def _session() -> requests.Session:
+    s = getattr(_thread_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        _thread_local.session = s
+    return s
 
-    # return_type is "entry", so identifiers are plain PDB IDs like "105M"
-    pdb_ids = set()
-    for hit in data.get("result_set", []):
-        pdb_ids.add(hit["identifier"].upper())
 
-    return pdb_ids
+def classify_pdb_ids(pdb_ids: set, max_workers: int = 20) -> tuple:
+    """
+    Check each PDB ID against the Data API in parallel.
+
+    Returns:
+        (included, excluded) — both sets of uppercase PDB IDs.
+    """
+    pdb_list = sorted(pdb_ids)
+    included = set()
+    total = len(pdb_list)
+    done = 0
+    progress_every = max(1, total // 20)
+
+    print(f"Verifying biological monomer status for {total} entries "
+          f"(Data API, {max_workers} threads)...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(is_biological_monomer, pid): pid for pid in pdb_list}
+        for fut in as_completed(futures):
+            pid = futures[fut]
+            try:
+                if fut.result():
+                    included.add(pid)
+            except Exception:
+                pass  # leave in excluded
+            done += 1
+            if done % progress_every == 0 or done == total:
+                print(f"  {done}/{total} checked ({len(included)} monomers so far)")
+
+    excluded = pdb_ids - included
+    return included, excluded
 
 
 def validate_results(included: set, excluded: set, n: int = 10):
@@ -165,19 +163,15 @@ def filter_mcsa(input_path: str, output_path: str, validate: bool = False):
     mcsa_pdb_ids = {r["pdb_id"].upper() for r in rows if r.get("pdb_id")}
     print(f"Unique PDB IDs in M-CSA: {len(mcsa_pdb_ids)}")
 
-    # Get monomeric protein PDB IDs from RCSB
-    mono_ids = get_monomeric_protein_pdb_ids()
-
-    # Intersect
-    included = mcsa_pdb_ids & mono_ids
-    excluded = mcsa_pdb_ids - mono_ids
+    # Per-entry Data API check (biological assembly chain count)
+    included, excluded = classify_pdb_ids(mcsa_pdb_ids)
 
     print(f"\nResults:")
-    print(f"  Monomeric protein entries in M-CSA: {len(included)}")
+    print(f"  Biological monomers in M-CSA: {len(included)}")
     print(f"  Excluded: {len(excluded)}")
 
     # Filter rows and save
-    filtered = [r for r in rows if r.get("pdb_id", "").upper() in mono_ids]
+    filtered = [r for r in rows if r.get("pdb_id", "").upper() in included]
     print(f"  Rows in filtered output: {len(filtered)}")
 
     out_sep = "\t" if output_path.endswith(".tsv") else ","
