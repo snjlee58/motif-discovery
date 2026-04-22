@@ -10,10 +10,10 @@ Optionally validate a random sample of results:
 """
 
 import argparse
+import csv
 import json
 import random
 import requests
-import pandas as pd
 
 
 SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
@@ -149,11 +149,14 @@ def validate_results(included: set, excluded: set, n: int = 10):
 def filter_mcsa(input_path: str, output_path: str, validate: bool = False):
     """Read M-CSA parsed data, filter for monomeric entries, and save."""
 
-    sep = "\t" if input_path.endswith(".tsv") else ","
-    df = pd.read_csv(input_path, sep=sep)
-    print(f"Loaded {len(df)} rows from {input_path}")
+    in_sep = "\t" if input_path.endswith(".tsv") else ","
+    with open(input_path, newline="") as f:
+        reader = csv.DictReader(f, delimiter=in_sep)
+        fieldnames = reader.fieldnames
+        rows = list(reader)
+    print(f"Loaded {len(rows)} rows from {input_path}")
 
-    mcsa_pdb_ids = set(df["pdb_id"].str.upper().unique())
+    mcsa_pdb_ids = {r["pdb_id"].upper() for r in rows if r.get("pdb_id")}
     print(f"Unique PDB IDs in M-CSA: {len(mcsa_pdb_ids)}")
 
     # Get monomeric protein PDB IDs from RCSB
@@ -167,12 +170,15 @@ def filter_mcsa(input_path: str, output_path: str, validate: bool = False):
     print(f"  Monomeric protein entries in M-CSA: {len(included)}")
     print(f"  Excluded: {len(excluded)}")
 
-    # Filter and save
-    df_filtered = df[df["pdb_id"].str.upper().isin(mono_ids)].copy()
-    print(f"  Rows in filtered dataframe: {len(df_filtered)}")
+    # Filter rows and save
+    filtered = [r for r in rows if r.get("pdb_id", "").upper() in mono_ids]
+    print(f"  Rows in filtered output: {len(filtered)}")
 
     out_sep = "\t" if output_path.endswith(".tsv") else ","
-    df_filtered.to_csv(output_path, index=False, sep=out_sep)
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=out_sep)
+        writer.writeheader()
+        writer.writerows(filtered)
     print(f"\nSaved to {output_path}")
 
     # Save PDB ID lists
