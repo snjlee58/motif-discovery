@@ -247,36 +247,55 @@ echo ""
 echo "[2] Downloading AlphaFold structures..."
 mkdir -p $SCRATCH/$OUTDIR/structures
 
+TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members.txt)
 DOWNLOADED=0
 FAILED=0
 FAILED_IDS=""
+COUNT=0
+
+# Live progress bar: write to /dev/tty so the \r-based animation doesn't
+# pollute the log file. Falls back to /dev/null in non-interactive runs.
+BAR_OUT=/dev/null
+[ -w /dev/tty ] && BAR_OUT=/dev/tty
+BAR_FULL="########################################"   # 40 chars
+BAR_EMPTY="----------------------------------------"  # 40 chars
+
+render_bar() {
+  local cur=$1 total=$2 ok=$3 fail=$4 width=40
+  local filled=$(( cur * width / total ))
+  local empty=$(( width - filled ))
+  local pct=$(( cur * 100 / total ))
+  printf '\r  [%s%s] %3d%% (%d/%d)  ok=%d fail=%d' \
+    "${BAR_FULL:0:$filled}" "${BAR_EMPTY:0:$empty}" \
+    "$pct" "$cur" "$total" "$ok" "$fail" > "$BAR_OUT"
+}
 
 while read -r MEMBER_ID; do
+  COUNT=$((COUNT + 1))
   OUTFILE="$SCRATCH/$OUTDIR/structures/AF-${MEMBER_ID}-F1-model_v6.pdb"
-  
+
   if [ -f "$OUTFILE" ]; then
     DOWNLOADED=$((DOWNLOADED + 1))
-    continue
+  else
+    URL="https://alphafold.ebi.ac.uk/files/AF-${MEMBER_ID}-F1-model_v6.pdb"
+    if wget -q --timeout=10 -O "$OUTFILE" "$URL" 2>/dev/null; then
+      DOWNLOADED=$((DOWNLOADED + 1))
+    else
+      rm -f "$OUTFILE"
+      FAILED=$((FAILED + 1))
+      FAILED_IDS="${FAILED_IDS} ${MEMBER_ID}"
+    fi
   fi
 
-  URL="https://alphafold.ebi.ac.uk/files/AF-${MEMBER_ID}-F1-model_v6.pdb"
-  
-  if wget -q --timeout=10 -O "$OUTFILE" "$URL" 2>/dev/null; then
-    DOWNLOADED=$((DOWNLOADED + 1))
-  else
-    rm -f "$OUTFILE"
-    FAILED=$((FAILED + 1))
-    FAILED_IDS="${FAILED_IDS} ${MEMBER_ID}"
-  fi
+  render_bar "$COUNT" "$TOTAL" "$DOWNLOADED" "$FAILED"
 done < $SCRATCH/$OUTDIR/cluster_members.txt
 
-echo "  Downloaded: $DOWNLOADED"
-echo "  Failed: $FAILED"
+# Terminate the \r-animation line on the terminal, then log the final summary
+[ "$BAR_OUT" = "/dev/tty" ] && printf '\n' > /dev/tty
+echo "  Done: downloaded=$DOWNLOADED  failed=$FAILED"
 if [ -n "$FAILED_IDS" ]; then
   echo "  Failed IDs:$FAILED_IDS"
 fi
-
-echo "  DEBUG: finished download loop"
 
 # Add the experimental PDB structure for the query
 PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
