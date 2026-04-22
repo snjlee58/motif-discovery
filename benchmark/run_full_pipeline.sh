@@ -31,7 +31,7 @@ echo "============================================"
 
 tail -n +2 "$BENCHMARK_TSV" | \
     parallel --progress -j "$N_JOBS" --colsep '\t' \
-    'cd ~/motif && bash pipeline.sh {2} "" batch_family_{2} --quiet'
+    'cd ~/motif && bash pipeline.sh {2} batch_family_{2} --quiet'
 
 echo ""
 echo "Done! Results in \$SCRATCH/batch_family_*/"

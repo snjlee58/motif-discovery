@@ -28,47 +28,37 @@ set -euo pipefail
 #   -O $SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
 # gunzip $SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
 
-# Usage:
-#   bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]
-#   If uniprot_id is omitted, it will be resolved automatically via UniProt ID Mapping API.
-#
-# Examples:
-#   bash pipeline.sh 1BTL
-#   bash pipeline.sh 1BTL P62593
-#   bash pipeline.sh 1BTL P62593 250212_family_1btl
-
-
-
 # Family View Pipeline
 # Instead of: query → foldseek search → hits → foldmason
 # We do:      query → find AFDB cluster → get all members → foldmason
 #
 # Prerequisites:
 #   1. Download AFDB cluster membership file:
-#      wget https://afdb-cluster.steineggerlab.workers.dev/1-AFDBClusters-entryId_repId_taxId.tsv.gz \
-#        -O $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz
-#      gunzip $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz
-#
-#   2. (Optional) If you want ALL members including non-AFDB50:
-#      wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+#      wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz \
+#        -O $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+#      gunzip $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
 #
 # Usage:
-#   bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]
+#   bash pipeline.sh <pdb_id> [output_dir] [--quiet]
+#
+# The UniProt ID is resolved automatically from the PDB ID via the UniProt
+# ID Mapping API. To override (e.g. if the API is down or maps wrong):
+#   UNIPROT_ID=P62593 bash pipeline.sh 1BTL
 #
 # Examples:
 #   bash pipeline.sh 1BTL
-#   bash pipeline.sh 1BTL P62593
-#   bash pipeline.sh 1BTL P62593 250212_family_1btl
+#   bash pipeline.sh 1BTL 250212_family_1btl
+#   bash pipeline.sh 1BTL 250212_family_1btl --quiet
 
 PIPELINE_START=$(date +%s)
 
 #####################
 # ARGUMENTS
 #####################
-PDB_ID=${1:?"Usage: bash pipeline.sh <pdb_id> [uniprot_id] [output_dir]"}
-UNIPROT_ID=${2:-""}
-OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
-QUIET=${4:-""}
+PDB_ID=${1:?"Usage: bash pipeline.sh <pdb_id> [output_dir] [--quiet]"}
+OUTDIR=${2:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
+QUIET=${3:-""}
+UNIPROT_ID=${UNIPROT_ID:-""}   # env-var override; otherwise resolved below
 
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 
@@ -172,7 +162,7 @@ else:
     echo "ERROR: Could not resolve UniProt ID for PDB $PDB_ID"
     echo "  Debug: last raw response from API:"
     echo "  $RESULT_RAW" | head -5
-    echo "  Try providing it manually: bash pipeline.sh $PDB_ID <uniprot_id>"
+    echo "  Try providing it manually: UNIPROT_ID=<uniprot_id> bash pipeline.sh $PDB_ID"
     exit 1
   fi
   echo "  Resolved: $PDB_ID -> $UNIPROT_ID"

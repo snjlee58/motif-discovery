@@ -90,7 +90,7 @@ print(f\"$MCSA_ID\t$PDB_UPPER\t$N_RES\tSUCCESS\t{m['precision']:.4f}\t{m['recall
     # Run pipeline with timing
     echo "  Running pipeline.sh..."
 
-    if (cd "$MOTIF_DIR" && bash pipeline.sh "$PDB_UPPER" "" "$OUTDIR" --quiet); then
+    if (cd "$MOTIF_DIR" && bash pipeline.sh "$PDB_UPPER" "$OUTDIR" --quiet); then
         ELAPSED=$(grep "^ELAPSED_SECONDS=" "$SCRATCH/$OUTDIR/pipeline.log" 2>/dev/null | tail -1 | cut -d= -f2)
         ELAPSED=${ELAPSED:-"?"}
         echo "  ✓ Pipeline completed (${ELAPSED}s)"
