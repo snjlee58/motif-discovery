@@ -71,7 +71,16 @@ OUTDIR=${3:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 QUIET=${4:-""}
 
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
-CLUSTER_FILE="$SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
+
+# $FAST points to shared NVMe storage (e.g. /fast/sunny) holding persistent reference
+# databases (AFDB clusters, M-CSA, PDB cache) — visible from every compute node.
+# Falls back to $SCRATCH for single-node setups where nothing has been moved yet.
+FAST="${FAST:-$SCRATCH}"
+
+CLUSTER_FILE="$FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
+MCSA_FILE="$FAST/m-csa/catalytic_residues_homologues_parsed.tsv"
+PDB_CACHE="$FAST/pdb_files"
+mkdir -p "$PDB_CACHE"
 
 # Set up logging
 mkdir -p $SCRATCH/$OUTDIR
@@ -184,10 +193,10 @@ echo "[1] Finding AFDB cluster for $UNIPROT_ID..."
 
 if [ ! -f "$CLUSTER_FILE" ]; then
   echo "ERROR: Cluster file not found at $CLUSTER_FILE"
-  echo "Download it first:"
-  echo "  mkdir -p $SCRATCH/afdb_clusters"
-  echo "  wget https://afdb-cluster.steineggerlab.workers.dev/1-AFDBClusters-entryId_repId_taxId.tsv.gz -O $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz"
-  echo "  gunzip $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz"
+  echo "Download it first (FAST=$FAST):"
+  echo "  mkdir -p $FAST/afdb_clusters"
+  echo "  wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz -O $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
+  echo "  gunzip $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
   exit 1
 fi
 
@@ -270,7 +279,7 @@ fi
 echo "  DEBUG: finished download loop"
 
 # Add the experimental PDB structure for the query
-PDB_FILE="$SCRATCH/pdb_files/${PDB_ID}.pdb"
+PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
 if [ ! -f "$PDB_FILE" ]; then
   echo "  Downloading $PDB_ID from RCSB..."
   wget -q --timeout=30 \
@@ -290,12 +299,6 @@ fi
 echo "  DEBUG: counting structures"
 N_STRUCTURES=$(find $SCRATCH/$OUTDIR/structures -name "*.pdb" -o -name "*.cif" | wc -l)
 echo "  Total structures for alignment: $N_STRUCTURES"
-
-# # Add the experimental PDB structure for the query
-# cp $SCRATCH/pdb_files/${PDB_ID}.pdb $SCRATCH/$OUTDIR/structures/ 2>/dev/null || true
-
-# N_STRUCTURES=$(ls $SCRATCH/$OUTDIR/structures/*.pdb $SCRATCH/$OUTDIR/structures/*.cif 2>/dev/null | wc -l)
-# echo "  Total structures for alignment: $N_STRUCTURES"
 
 if [ "$N_STRUCTURES" -lt 3 ]; then
   echo "ERROR: Too few structures downloaded ($N_STRUCTURES). Need at least 3."
@@ -338,7 +341,7 @@ echo "[5] Mapping alignment columns to PDB residue IDs..."
 python3 map_alignment_to_pdb.py \
   $MSA_FILE \
   $PDB_ID \
-  --pdb-file $SCRATCH/pdb_files/${PDB_ID}.pdb \
+  --pdb-file $PDB_CACHE/${PDB_ID}.pdb \
   --uniprot $UNIPROT_ID \
   -o $SCRATCH/$OUTDIR/alignment_mapping.json
 
@@ -349,7 +352,7 @@ echo ""
 echo "[5b] Running P2Rank binding site prediction..."
 
 P2RANK_JSON="$SCRATCH/$OUTDIR/p2rank_scores.json"
-PDB_FILE="$SCRATCH/pdb_files/${PDB_ID}.pdb"
+PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
 
 if command -v prank &>/dev/null && [ -f "$PDB_FILE" ]; then
   prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
@@ -400,8 +403,6 @@ python3 extract_top_conserved.py \
 echo ""
 echo "[7] Benchmarking against M-CSA ground truth..."
 
-MCSA_FILE="$SCRATCH/m-csa/catalytic_residues_homologues_parsed.tsv"
-
 if [ -f "$MCSA_FILE" ]; then
   # Build P2Rank argument if available
   P2RANK_ARG=""
@@ -414,7 +415,7 @@ if [ -f "$MCSA_FILE" ]; then
     $MCSA_FILE \
     $SCRATCH/$OUTDIR/alignment_mapping.json \
     --pdb-id $PDB_ID_LOWER \
-    --pdb-file $SCRATCH/pdb_files/${PDB_ID}.pdb \
+    --pdb-file $PDB_CACHE/${PDB_ID}.pdb \
     --top-n auto \
     --exclude-gaps \
     --catalytic-propensity \
