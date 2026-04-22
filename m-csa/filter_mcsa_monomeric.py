@@ -38,11 +38,13 @@ def get_monomeric_protein_pdb_ids() -> set:
                     # rcsb_assembly_info.polymer_entity_instance_count is per-assembly and
                     # matches the deposited ASU (not just the biological assembly), so it
                     # incorrectly passes homodimers that crystallize with one chain per ASU.
+                    # Note: this attribute is an enumerated text field, so RCSB requires
+                    # `exact_match` (not `equals`) as the operator.
                     "type": "terminal",
                     "service": "text",
                     "parameters": {
                         "attribute": "rcsb_struct_symmetry.oligomeric_state",
-                        "operator": "equals",
+                        "operator": "exact_match",
                         "value": "Monomeric"
                     }
                 },
