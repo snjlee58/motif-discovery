@@ -129,6 +129,24 @@ class ConservationScorer:
         
         return blosum_scores
     
+    def calculate_3di_conservation(
+        self,
+        alignment: MultipleSeqAlignment,
+    ) -> np.ndarray:
+        """
+        Compute per-column conservation from a FoldMason 3Di alignment.
+
+        Uses Shannon entropy only (BLOSUM62 is AA-specific and does not apply
+        to 3Di structural tokens). Higher = more structurally conserved.
+
+        Returns:
+            Array of 3Di conservation scores in [0, 1]
+        """
+        entropy = self.calculate_shannon_entropy(alignment)
+        max_entropy = np.log2(20)
+        scores = 1.0 - (entropy / max_entropy)
+        return np.clip(np.nan_to_num(scores, nan=0.0), 0.0, 1.0)
+
     def calculate_combined_conservation(
         self,
         alignment: MultipleSeqAlignment,
@@ -306,15 +324,18 @@ class ConservationScorer:
         self,
         alignment: MultipleSeqAlignment,
         output_path: Path,
-        include_stats: bool = True
+        include_stats: bool = True,
+        di3_conservation: np.ndarray = None,
     ):
         """
         Calculate and save all conservation metrics.
-        
+
         Args:
             alignment: MultipleSeqAlignment object
             output_path: Path to save JSON file
             include_stats: Include summary statistics
+            di3_conservation: Optional per-column 3Di conservation scores from
+                calculate_3di_conservation(). Saved as '3di_conservation' per position.
         """
         # Calculate all metrics
         entropy = self.calculate_shannon_entropy(alignment)
@@ -323,7 +344,7 @@ class ConservationScorer:
         gap_freq = self.calculate_gap_frequency(alignment)
         identity = self.calculate_sequence_identity(alignment)
         consensus = self.get_consensus_sequence(alignment)
-        
+
         # Prepare data
         data = {
             'alignment_length': alignment.get_alignment_length(),
@@ -331,7 +352,7 @@ class ConservationScorer:
             'consensus': consensus,
             'positions': []
         }
-        
+
         # Add per-position data
         for i in range(alignment.get_alignment_length()):
             pos_data = {
@@ -341,7 +362,8 @@ class ConservationScorer:
                 'blosum_score': float(blosum[i]) if not np.isnan(blosum[i]) else None,
                 'conservation': float(conservation[i]),
                 'gap_frequency': float(gap_freq[i]),
-                'identity': float(identity[i])
+                'identity': float(identity[i]),
+                '3di_conservation': float(di3_conservation[i]) if di3_conservation is not None else None,
             }
             data['positions'].append(pos_data)
         

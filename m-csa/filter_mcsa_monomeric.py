@@ -22,7 +22,7 @@ SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 def get_monomeric_protein_pdb_ids() -> set:
     """
     Query RCSB Search API for all PDB entries where:
-      1. The biological assembly has exactly 1 polymer chain
+      1. RCSB's curated biological-assembly oligomeric state is "Monomeric"
       2. The entry has exactly 1 protein entity
       3. The entry has no DNA or RNA entities
 
@@ -34,12 +34,16 @@ def get_monomeric_protein_pdb_ids() -> set:
             "logical_operator": "and",
             "nodes": [
                 {
+                    # Use the curated oligomeric state rather than raw chain-instance count.
+                    # rcsb_assembly_info.polymer_entity_instance_count is per-assembly and
+                    # matches the deposited ASU (not just the biological assembly), so it
+                    # incorrectly passes homodimers that crystallize with one chain per ASU.
                     "type": "terminal",
                     "service": "text",
                     "parameters": {
-                        "attribute": "rcsb_assembly_info.polymer_entity_instance_count",
+                        "attribute": "rcsb_struct_symmetry.oligomeric_state",
                         "operator": "equals",
-                        "value": 1
+                        "value": "Monomeric"
                     }
                 },
                 {
@@ -128,8 +132,8 @@ def validate_results(included: set, excluded: set, n: int = 10):
             asm_chains = asm_info.get("polymer_entity_instance_count", "?")
 
         protein = info.get("polymer_entity_count_protein", "?")
-        dna = info.get("polymer_entity_count_dna", "?")
-        rna = info.get("polymer_entity_count_rna", "?")
+        dna = info.get("polymer_entity_count_DNA", "?")
+        rna = info.get("polymer_entity_count_RNA", "?")
 
         print(f"  {pdb_id}: chains={asm_chains}  protein={protein}  DNA={dna}  RNA={rna}")
 

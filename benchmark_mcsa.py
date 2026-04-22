@@ -299,16 +299,21 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
             else:
                 # No P2Rank data for this residue — leave at 0, don't penalize
                 pos['p2rank_probability'] = None
-        
+
+        # Signal 4: 3Di structural conservation (absent in older JSONs → 0, no penalty)
+        s_3di = pos.get('3di_conservation') or 0.0
+
         # Weighted additive combination
         # Conservation is the backbone, other signals boost
         W_CONSERVATION = 1.0
         W_P2RANK = 0.35
         W_PROPENSITY = 0.25
-        
+        W_3DI = 0.30
+
         score = (W_CONSERVATION * s_conservation
                  + W_P2RANK * s_p2rank
-                 + W_PROPENSITY * s_propensity)
+                 + W_PROPENSITY * s_propensity
+                 + W_3DI * s_3di)
         
         pos['combined_score'] = score
         filtered.append(pos)
@@ -364,6 +369,9 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         signals.append("P2Rank binding site")
     if pdb_file and Path(pdb_file).exists():
         signals.append("spatial clustering")
+    has_3di = any(p.get('3di_conservation') is not None for p in filtered)
+    if has_3di:
+        signals.append("3Di structural conservation")
     if signals:
         print(f"  Active signals: conservation + {' + '.join(signals)}")
     

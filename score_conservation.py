@@ -45,31 +45,31 @@ def main():
     protein_name = sys.argv[3] if len(sys.argv) > 3 else "1btl"
     cons_file = outdir / f"{protein_name}_conservation.json"
 
-
-    # Step 1: Read the MSA
-    print(f"\n[1] 📊 Reading alignment from {msa_path}...")
-    alignment = AlignIO.read(msa_path, "fasta")  # Converts Foldmason MSA fasta into MultipleSeqAlignment object
-    # print(alignment)
+    # Step 1: Read the AA MSA
+    print(f"\n[1] Reading alignment from {msa_path}...")
+    alignment = AlignIO.read(msa_path, "fasta")
     print(f"       {len(alignment)} sequences, {alignment.get_alignment_length()} columns")
 
-
-    # Step 2: Calculate conservation
-    print(f"\n[2] 📊 Calculating conservation scores...")
     scorer = ConservationScorer()
-    
+
+    # Step 2: Calculate AA conservation
+    print(f"\n[2] Calculating conservation scores...")
     conservation = scorer.calculate_combined_conservation(alignment)
-    gap_freq = scorer.calculate_gap_frequency(alignment)
-    consensus = scorer.get_consensus_sequence(alignment)
-    
-    scorer.save_conservation_scores(alignment, cons_file)
-    print(f"       Mean conservation: {conservation.mean():.3f}, "
-          f"Max: {conservation.max():.3f}")
-    print(f"       Saved to {cons_file}")
-    
-    # results_data['conservation'] = conservation.tolist()
-    # results_data['mean_conservation'] = float(conservation.mean())
-    # results_data['max_conservation'] = float(conservation.max())
-    # results_data['files']['conservation'] = cons_file
+    print(f"       Mean: {conservation.mean():.3f}, Max: {conservation.max():.3f}")
+
+    # Step 3: Calculate 3Di structural conservation (if available)
+    di3_scores = None
+    di3_path = outdir / "foldmason_result_3di.fa"
+    if di3_path.exists():
+        print(f"\n[3] Calculating 3Di structural conservation from {di3_path.name}...")
+        di3_alignment = AlignIO.read(str(di3_path), "fasta")
+        di3_scores = scorer.calculate_3di_conservation(di3_alignment)
+        print(f"       Mean: {di3_scores.mean():.3f}, Max: {di3_scores.max():.3f}")
+    else:
+        print(f"\n[3] 3Di MSA not found at {di3_path}, skipping...")
+
+    scorer.save_conservation_scores(alignment, cons_file, di3_conservation=di3_scores)
+    print(f"\n       Saved to {cons_file}")
 
 
 if __name__ == "__main__":
