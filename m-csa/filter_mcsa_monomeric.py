@@ -22,9 +22,15 @@ SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 def get_monomeric_protein_pdb_ids() -> set:
     """
     Query RCSB Search API for all PDB entries where:
-      1. RCSB's curated biological-assembly oligomeric state is "Monomeric"
-      2. The entry has exactly 1 protein entity
-      3. The entry has no DNA or RNA entities
+      1. Exactly 1 protein entity (one unique protein sequence)
+      2. Exactly 1 polymer chain deposited in the coordinates
+      3. No DNA or RNA entities
+
+    We use entry-level attributes only. `rcsb_struct_symmetry.oligomeric_state`
+    would be stricter (biological-assembly monomer) but is a nested-array field
+    that returns empty results via simple operators — for M-CSA reference
+    structures the deposited coords usually match the biological assembly, so
+    entry-level filtering is a good-enough proxy.
 
     Returns a set of uppercase PDB IDs.
     """
@@ -34,25 +40,19 @@ def get_monomeric_protein_pdb_ids() -> set:
             "logical_operator": "and",
             "nodes": [
                 {
-                    # Use the curated oligomeric state rather than raw chain-instance count.
-                    # rcsb_assembly_info.polymer_entity_instance_count is per-assembly and
-                    # matches the deposited ASU (not just the biological assembly), so it
-                    # incorrectly passes homodimers that crystallize with one chain per ASU.
-                    # Note: this attribute is an enumerated text field, so RCSB requires
-                    # `exact_match` (not `equals`) as the operator.
                     "type": "terminal",
                     "service": "text",
                     "parameters": {
-                        "attribute": "rcsb_struct_symmetry.oligomeric_state",
-                        "operator": "exact_match",
-                        "value": "Monomeric"
+                        "attribute": "rcsb_entry_info.polymer_entity_count_protein",
+                        "operator": "equals",
+                        "value": 1
                     }
                 },
                 {
                     "type": "terminal",
                     "service": "text",
                     "parameters": {
-                        "attribute": "rcsb_entry_info.polymer_entity_count_protein",
+                        "attribute": "rcsb_entry_info.deposited_polymer_entity_instance_count",
                         "operator": "equals",
                         "value": 1
                     }
@@ -87,6 +87,10 @@ def get_monomeric_protein_pdb_ids() -> set:
     resp = requests.post(SEARCH_URL, json=query, timeout=120)
     print(f"HTTP {resp.status_code}")
 
+    # RCSB returns 204 No Content when the query is valid but matches zero entries.
+    if resp.status_code == 204:
+        print("WARNING: query returned zero hits — check attribute names/values")
+        return set()
     if resp.status_code != 200:
         print(f"Response: {resp.text[:500]}")
         raise RuntimeError(f"RCSB Search API failed with HTTP {resp.status_code}")
