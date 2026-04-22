@@ -29,9 +29,11 @@ echo "  Jobs:     $N_JOBS parallel"
 echo "  Est time: ~$((TOTAL * 108 / N_JOBS / 60)) minutes"
 echo "============================================"
 
-tail -n +2 "$BENCHMARK_TSV" | \
-    parallel --progress -j "$N_JOBS" --colsep '\t' \
-    'cd ~/motif && bash pipeline.sh {2} batch_family_{2} --quiet'
+# Extract column 2 (PDB ID) and run pipeline.sh on each, N_JOBS at a time.
+# Using xargs -P rather than GNU parallel so it works without extra deps.
+tail -n +2 "$BENCHMARK_TSV" | cut -f2 | \
+    xargs -P "$N_JOBS" -I{} bash -c \
+    'cd ~/motif && bash pipeline.sh "$1" "batch_family_$1" --quiet' _ {}
 
 echo ""
 echo "Done! Results in \$SCRATCH/batch_family_*/"
