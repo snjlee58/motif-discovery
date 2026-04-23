@@ -28,3 +28,7 @@ Thumbs.db
 structures/
 *.pdb.gz
 cluster_members.txt
+
+# SLURM output logs (the .gitkeep preserves the directory)
+slurm_logs/*
+!slurm_logs/.gitkeep
