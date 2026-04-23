@@ -19,6 +19,12 @@
 # Note: no -e — we want persistence to run even if the pipeline fails.
 set -uo pipefail
 
+# Activate the conda env that has biopython/numpy/etc.
+# sbatch runs in a bare non-interactive shell, so conda's shell functions
+# aren't auto-sourced from .bashrc. Source them explicitly.
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate motif
+
 export FAST="/fast/sunny"
 OUTPUT_PERSIST="/fast/sunny/batch_out/job_${SLURM_JOB_ID}"
 mkdir -p "$OUTPUT_PERSIST"
@@ -64,6 +70,16 @@ for cmd in wget foldmason python3 xargs cp mkdir; do
         echo "  OK   $cmd: $(command -v $cmd)"
     else
         echo "  MISS $cmd: NOT FOUND"
+    fi
+done
+
+echo ""
+echo "Python module check:"
+for mod in Bio numpy; do
+    if python3 -c "import $mod" &>/dev/null; then
+        echo "  OK   python3 -c 'import $mod'"
+    else
+        echo "  MISS python3 cannot import $mod  (run: pip install --user biopython numpy)"
     fi
 done
 
