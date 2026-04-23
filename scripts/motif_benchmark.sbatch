@@ -9,35 +9,39 @@
 
 # Run the full motif-discovery benchmark across all M-CSA representative monomers.
 #
-# IMPORTANT: per the lab guide, $SCRATCH under SLURM resolves to
-# /mnt/scratch/$USER/$SLURM_JOB_ID and is AUTO-DELETED when the job ends.
-# We use it for heavy I/O (downloads, FoldMason MSAs) but rsync the
-# non-reproducible outputs to $FAST before exit so they survive.
+# $SCRATCH under SLURM = /mnt/scratch/$USER/$SLURM_JOB_ID and is AUTO-DELETED
+# on job exit. We persist small result files to $FAST before exiting so they
+# survive. The trap fires on normal exit, Ctrl+C, or SIGTERM (within SLURM's
+# grace period before SIGKILL).
 #
-# Submit with:  sbatch scripts/motif_benchmark.sbatch
-# Monitor with: squeue -u $USER  /  tail -f slurm_logs/motif_<jobid>.out
+# Submit with: sbatch scripts/motif_benchmark.sbatch
 
-set -euo pipefail
+# Note: no -e — we want persistence to run even if the pipeline fails.
+set -uo pipefail
 
 export FAST="/fast/sunny"
 OUTPUT_PERSIST="/fast/sunny/batch_out/job_${SLURM_JOB_ID}"
 mkdir -p "$OUTPUT_PERSIST"
 
-# Rsync results to persistent storage before $SCRATCH is auto-deleted.
-# Runs on normal exit, Ctrl+C, or SIGTERM from SLURM's grace period.
 persist_results() {
     echo ""
     echo "=================================="
     echo "Persisting results to $OUTPUT_PERSIST..."
-    # Skip structures/ (re-downloadable from AFDB) and intermediate p2rank/tmp dirs
-    rsync -a \
-        --exclude='structures/' \
-        --exclude='p2rank_output/' \
-        --exclude='tmp/' \
-        "$SCRATCH/" "$OUTPUT_PERSIST/" 2>&1 || true
+    # Portable cp-based copy — no rsync needed. Grabs the small result files
+    # (json / fa / nw / txt / log) and skips large intermediate dirs
+    # (structures/, p2rank_output/, tmp/) which are re-derivable.
+    for d in "$SCRATCH"/batch_family_*/; do
+        [ -d "$d" ] || continue
+        name=$(basename "$d")
+        dst="$OUTPUT_PERSIST/$name"
+        mkdir -p "$dst"
+        cp "$d"/*.json "$d"/*.fa "$d"/*.nw "$d"/*.txt "$d"/*.log "$dst/" 2>/dev/null || true
+    done
+    n=$(ls -d "$OUTPUT_PERSIST"/batch_family_*/ 2>/dev/null | wc -l)
+    echo "Persisted $n batch_family_* directories to $OUTPUT_PERSIST"
     echo "Persistence done: $(date)"
     echo "=================================="
-    echo "To aggregate results, run from anywhere:"
+    echo "Aggregate with:"
     echo "  SCRATCH=$OUTPUT_PERSIST python3 ~/motif/benchmark/summarize_benchmark.py \\"
     echo "    ~/motif/benchmark/benchmark_representative_monomers.tsv"
     echo "=================================="
@@ -54,8 +58,49 @@ echo "Persist:    $OUTPUT_PERSIST"
 echo "Started:    $(date)"
 echo "=================================="
 
+echo "Dependency check on $(hostname):"
+for cmd in wget foldmason python3 xargs cp mkdir; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "  OK   $cmd: $(command -v $cmd)"
+    else
+        echo "  MISS $cmd: NOT FOUND"
+    fi
+done
+
+echo ""
+echo "Network check (AFDB cluster file):"
+if [ -f "$FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv" ]; then
+    echo "  OK   cluster file present"
+else
+    echo "  MISS cluster file not found at $FAST/afdb_clusters/"
+fi
+
+echo ""
+echo "Network check (UniProt API reachable):"
+if wget -q --timeout=10 --spider https://rest.uniprot.org/idmapping/run 2>/dev/null; then
+    echo "  OK   rest.uniprot.org reachable"
+else
+    # spider might fail with POST-only endpoints; try a simpler URL
+    if wget -q --timeout=10 -O /dev/null https://rest.uniprot.org/ 2>/dev/null; then
+        echo "  OK   rest.uniprot.org reachable"
+    else
+        echo "  WARN rest.uniprot.org NOT reachable from this node"
+    fi
+fi
+
+echo ""
+echo "Network check (AlphaFold EBI reachable):"
+if wget -q --timeout=10 -O /dev/null https://alphafold.ebi.ac.uk/ 2>/dev/null; then
+    echo "  OK   alphafold.ebi.ac.uk reachable"
+else
+    echo "  WARN alphafold.ebi.ac.uk NOT reachable from this node"
+fi
+echo "=================================="
+
 cd ~/motif/benchmark
 bash run_full_pipeline.sh "$SLURM_CPUS_PER_TASK"
+pipeline_exit=$?
 
 echo "=================================="
+echo "run_full_pipeline.sh exited with code: $pipeline_exit"
 echo "Pipeline finished: $(date)"
