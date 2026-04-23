@@ -243,10 +243,16 @@ FAILED=0
 FAILED_IDS=""
 COUNT=0
 
-# Live progress bar: write to /dev/tty so the \r-based animation doesn't
-# pollute the log file. Falls back to /dev/null in non-interactive runs.
+# Live progress bar: write to /dev/tty when an interactive terminal is
+# actually usable; otherwise silently discard to /dev/null.
+# Note: `[ -w /dev/tty ]` is misleading — it checks permission bits, not whether
+# a controlling terminal exists. Under SLURM/quiet mode that test passes but the
+# actual write fails with "No such device or address". We probe by trying to
+# open /dev/tty for writing inside a subshell.
 BAR_OUT=/dev/null
-[ -w /dev/tty ] && BAR_OUT=/dev/tty
+if [ "$QUIET" != "--quiet" ] && { : >/dev/tty; } 2>/dev/null; then
+  BAR_OUT=/dev/tty
+fi
 BAR_FULL="########################################"   # 40 chars
 BAR_EMPTY="----------------------------------------"  # 40 chars
 
