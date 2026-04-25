@@ -28,16 +28,15 @@ conda activate motif
 export FAST="/fast/sunny"
 
 TS=$(date +%y%m%d_%H%M%S)
-PERSIST="/fast/sunny/motif/single_runs/${TS}_job${SLURM_JOB_ID}_${PDB_ID}"
-mkdir -p "$PERSIST"
+OUTDIR="${TS}_job${SLURM_JOB_ID}_${PDB_ID}"
+PERSIST_BASE="/fast/sunny/motif/single_runs"
+mkdir -p "$PERSIST_BASE"
 
 persist_results() {
     echo ""
     echo "=================================="
-    echo "Persisting results to $PERSIST..."
-    cp -r "$SCRATCH"/*_family_"$PDB_ID" "$PERSIST"/ 2>/dev/null || true
-    n=$(ls -d "$PERSIST"/*_family_"$PDB_ID"/ 2>/dev/null | wc -l)
-    echo "Persisted $n result dir(s) to $PERSIST"
+    echo "Persisting results to $PERSIST_BASE/$OUTDIR..."
+    cp -r "$SCRATCH/$OUTDIR" "$PERSIST_BASE/" 2>/dev/null || true
     echo "Persistence done: $(date)"
     echo "=================================="
 }
