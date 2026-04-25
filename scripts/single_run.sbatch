@@ -49,12 +49,12 @@ echo "PDB ID:     $PDB_ID"
 echo "CPUs:       $SLURM_CPUS_PER_TASK"
 echo "SCRATCH:    $SCRATCH  (auto-deleted at job end)"
 echo "FAST:       $FAST"
-echo "Persist:    $PERSIST"
+echo "Persist:    $PERSIST_BASE/$OUTDIR"
 echo "Started:    $(date)"
 echo "=================================="
 
 cd ~/motif
-bash pipeline.sh "$PDB_ID"
+bash pipeline.sh "$PDB_ID" "$OUTDIR"
 pipeline_exit=$?
 
 echo "=================================="
