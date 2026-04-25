@@ -1,9 +1,9 @@
-# python3 score_conservation.py $SCRATCH/foldmason_result_aa.fa "$SCRATCH/conservation_scores"
+# python3 src/score_conservation.py $SCRATCH/foldmason_result_aa.fa "$SCRATCH/conservation_scores"
 
 import sys
 from pathlib import Path
 from Bio import AlignIO
-from evomotif_conservation import ConservationScorer
+from conservation import ConservationScorer
 
 AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
 

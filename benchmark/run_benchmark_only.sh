@@ -81,7 +81,7 @@ cat "$TMPFILE" | parallel --progress -j "$N_JOBS" '
     PDB_ARG=""
     [ -f "$PDB_FILE" ] && PDB_ARG="--pdb-file $PDB_FILE"
 
-    cd '"$MOTIF_DIR"' && python3 benchmark_mcsa.py \
+    cd '"$MOTIF_DIR"' && python3 src/benchmark_mcsa.py \
         "$CONS" "$MCSA" "$MAP" \
         --pdb-id "$PDB_LOWER" \
         --top-n auto \

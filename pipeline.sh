@@ -329,14 +329,14 @@ echo "  Alignment length: $ALN_LEN"
 #####################
 echo ""
 echo "[4] Running conservation scoring..."
-python3 score_conservation.py $SCRATCH/$OUTDIR $MSA_FILE $PDB_ID_LOWER
+python3 src/score_conservation.py $SCRATCH/$OUTDIR $MSA_FILE $PDB_ID_LOWER
 
 #####################
 # STEP 5: Create alignment mapping
 #####################
 echo ""
 echo "[5] Mapping alignment columns to PDB residue IDs..."
-python3 map_alignment_to_pdb.py \
+python3 src/map_alignment_to_pdb.py \
   $MSA_FILE \
   $PDB_ID \
   --pdb-file $PDB_CACHE/${PDB_ID}.pdb \
@@ -374,7 +374,7 @@ run_p2rank() {
     echo "  WARNING: prank ran but produced no residues CSV"
     return 1
   fi
-  if ! python3 parse_p2rank.py "$csv" -o "$P2RANK_JSON"; then
+  if ! python3 src/parse_p2rank.py "$csv" -o "$P2RANK_JSON"; then
     echo "  WARNING: parse_p2rank.py failed"
     return 1
   fi
@@ -393,7 +393,7 @@ echo ""
 echo "[6] Extracting top conserved positions..."
 
 # Top 5 with mapping
-python3 extract_top_conserved.py \
+python3 src/extract_top_conserved.py \
   $SCRATCH/$OUTDIR/${PDB_ID_LOWER}_conservation.json \
   --top-n 5 \
   --exclude-gaps \
@@ -402,7 +402,7 @@ python3 extract_top_conserved.py \
   --output $SCRATCH/$OUTDIR/top5_motif.txt
 
 # Also extract top 10 for comparison
-python3 extract_top_conserved.py \
+python3 src/extract_top_conserved.py \
   $SCRATCH/$OUTDIR/${PDB_ID_LOWER}_conservation.json \
   --top-n 10 \
   --exclude-gaps \
@@ -423,7 +423,7 @@ if [ -f "$MCSA_FILE" ]; then
     P2RANK_ARG="--p2rank-json $P2RANK_JSON"
   fi
 
-  python3 benchmark_mcsa.py \
+  python3 src/benchmark_mcsa.py \
     $SCRATCH/$OUTDIR/${PDB_ID_LOWER}_conservation.json \
     $MCSA_FILE \
     $SCRATCH/$OUTDIR/alignment_mapping.json \

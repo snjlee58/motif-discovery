@@ -3,6 +3,8 @@ Conservation scoring module.
 
 Implements Shannon entropy and BLOSUM62-weighted conservation scoring
 for multiple sequence alignments.
+
+Portions adapted from EvoMotif (https://github.com/tahagill/EvoMotif).
 """
 
 import numpy as np

@@ -6,8 +6,8 @@ This creates the mapping needed for benchmarking:
   alignment_column -> PDB auth_resid -> compare with M-CSA
 
 Usage:
-    python3 map_alignment_to_pdb.py <foldmason_msa.fa> <pdb_id> -o mapping.json
-    python3 map_alignment_to_pdb.py <foldmason_msa.fa> <pdb_id> --pdb-file 1BTL.pdb -o mapping.json
+    python3 src/map_alignment_to_pdb.py <foldmason_msa.fa> <pdb_id> -o mapping.json
+    python3 src/map_alignment_to_pdb.py <foldmason_msa.fa> <pdb_id> --pdb-file 1BTL.pdb -o mapping.json
 """
 
 import json

@@ -6,7 +6,7 @@ P2Rank outputs a *_residues.csv with per-residue binding site scores.
 This script extracts those scores keyed by auth_resid.
 
 Usage:
-    python3 parse_p2rank.py <p2rank_residues.csv> -o p2rank_scores.json [--chain A]
+    python3 src/parse_p2rank.py <p2rank_residues.csv> -o p2rank_scores.json [--chain A]
 """
 
 import csv

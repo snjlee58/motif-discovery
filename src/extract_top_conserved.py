@@ -4,7 +4,7 @@ Extract top N most conserved positions from conservation scoring results.
 This is your baseline for M-CSA benchmarking.
 
 Usage:
-    python3 extract_top_conserved.py <conservation_json> --top-n 5
+    python3 src/extract_top_conserved.py <conservation_json> --top-n 5
 """
 
 import json
