@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate benchmark input list from parsed M-CSA TSV.
+Extract a PDB-id list from a parsed M-CSA TSV.
 
-Extracts all is_reference=True entries and outputs a TSV with:
+Reads is_reference=True entries and writes a TSV:
   mcsa_id  pdb_id  n_catalytic_residues
 
 Usage:
-    python3 generate_benchmark_list.py <ccatalytic_residues_homologues_parsed.tsv> [-o benchmark_list.tsv] [--max N]
-
-Example:   
-    python3 generate_benchmark_list.py ../m-csa/mcsa_monomeric.tsv -o pilot_20.tsv --max 20 --shuffle
+    python3 extract_pdb_list_from_mcsa.py <catalytic_residues_homologues_parsed.tsv> \
+        [-o mcsa_representatives_parsed_monomers.tsv] [--max N] [--shuffle]
 """
 
 import csv
@@ -18,12 +16,13 @@ from collections import defaultdict
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate benchmark list from M-CSA TSV')
+    parser = argparse.ArgumentParser(description='Extract a PDB-id list from a parsed M-CSA TSV')
     parser.add_argument('mcsa_tsv', help='Parsed M-CSA TSV file')
-    parser.add_argument('-o', '--output', default='benchmark_list.tsv', help='Output TSV file')
-    parser.add_argument('--max', type=int, default=None, help='Max entries (for pilot runs)')
+    parser.add_argument('-o', '--output', default='mcsa_representatives_parsed_monomers.tsv',
+                        help='Output TSV file')
+    parser.add_argument('--max', type=int, default=None, help='Max entries (for subset runs)')
     parser.add_argument('--min-residues', type=int, default=1, help='Min catalytic residues to include')
-    parser.add_argument('--shuffle', action='store_true', help='Randomize order (for pilot sampling)')
+    parser.add_argument('--shuffle', action='store_true', help='Randomize order (for subset sampling)')
     
     args = parser.parse_args()
     

@@ -3,8 +3,9 @@
 Summarize benchmark results across all proteins.
 
 Usage (from anywhere):
-    python3 /home/sunnylee/motif/benchmark/summarize_benchmark.py \
-        /home/sunnylee/motif/benchmark/selected_proteins.tsv
+    python3 ~/motif/benchmark/summarize_results.py \
+        ~/motif/benchmark/mcsa_representatives_parsed_monomers.tsv \
+        --scratch /fast/sunny/motif/batch_runs/<TS>_job<ID>
 """
 import json
 import argparse
@@ -12,9 +13,9 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('tsv', help='selected_proteins.tsv')
+    parser.add_argument('tsv', help='Protein list TSV (mcsa_id, pdb_id, n_catalytic_residues)')
     parser.add_argument('--scratch', default='/mnt/scratch/sunny',
-                        help='Scratch directory where pipeline outputs live')
+                        help='Directory containing per-PDB result subdirs')
     parser.add_argument('--result-file', default='baseline_performance.json',
                     help='Which result file to read (e.g. performance_top10.json)')
     args = parser.parse_args()
@@ -25,28 +26,27 @@ def main():
     with open(args.tsv) as f:
         next(f)  # skip header
         for line in f:
-            mcsa_id, uniprot, pdb, n_res = line.strip().split('\t')
+            mcsa_id, pdb, n_res = line.strip().split('\t')
             proteins.append({
                 'mcsa_id': mcsa_id,
-                'uniprot': uniprot,
                 'pdb': pdb.upper(),
                 'n_res': int(n_res)
             })
 
-    print(f"\n{'PDB':<8} {'UniProt':<12} {'Cat.Res':<9} "
+    print(f"\n{'PDB':<8} {'MCSA':<8} {'Cat.Res':<9} "
           f"{'Precision':<11} {'Recall':<9} {'F1':<8} "
           f"{'TP/True':<10} {'Top-N':<7} {'Status'}")
-    print("=" * 90)
+    print("=" * 86)
 
     results = []
     not_run = []
 
     for p in proteins:
         pdb = p['pdb']
-        matches = sorted(scratch.glob(f"*family_{pdb}*/{args.result_file}"))
+        matches = sorted(scratch.glob(f"{pdb}/{args.result_file}"))
 
         if not matches:
-            print(f"{pdb:<8} {p['uniprot']:<12} {p['n_res']:<9} {'NOT RUN'}")
+            print(f"{pdb:<8} {p['mcsa_id']:<8} {p['n_res']:<9} {'NOT RUN'}")
             not_run.append(pdb)
             continue
 
@@ -56,12 +56,12 @@ def main():
         m = r['metrics']
         results.append(m)
 
-        print(f"{pdb:<8} {p['uniprot']:<12} {p['n_res']:<9} "
+        print(f"{pdb:<8} {p['mcsa_id']:<8} {p['n_res']:<9} "
               f"{m['precision']:<11.3f} {m['recall']:<9.3f} {m['f1']:<8.3f} "
               f"{m['tp']}/{m['n_true']:<8} {r['top_n']:<7} ✓")
 
     if results:
-        print("=" * 90)
+        print("=" * 86)
         n = len(results)
 
         def avg(key):

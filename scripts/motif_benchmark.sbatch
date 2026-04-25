@@ -26,30 +26,32 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate motif
 
 export FAST="/fast/sunny"
-OUTPUT_PERSIST="/fast/sunny/batch_out/job_${SLURM_JOB_ID}"
-mkdir -p "$OUTPUT_PERSIST"
+TS=$(date +%y%m%d_%H%M%S)
+BATCH_OUT="/fast/sunny/motif/batch_runs/${TS}_job${SLURM_JOB_ID}"
+mkdir -p "$BATCH_OUT"
 
 persist_results() {
     echo ""
     echo "=================================="
-    echo "Persisting results to $OUTPUT_PERSIST..."
+    echo "Persisting results to $BATCH_OUT..."
     # Portable cp-based copy — no rsync needed. Grabs the small result files
     # (json / fa / nw / txt / log) and skips large intermediate dirs
     # (structures/, p2rank_output/, tmp/) which are re-derivable.
-    for d in "$SCRATCH"/batch_family_*/; do
+    for d in "$SCRATCH"/batch/*/; do
         [ -d "$d" ] || continue
         name=$(basename "$d")
-        dst="$OUTPUT_PERSIST/$name"
+        dst="$BATCH_OUT/$name"
         mkdir -p "$dst"
         cp "$d"/*.json "$d"/*.fa "$d"/*.nw "$d"/*.txt "$d"/*.log "$dst/" 2>/dev/null || true
     done
-    n=$(ls -d "$OUTPUT_PERSIST"/batch_family_*/ 2>/dev/null | wc -l)
-    echo "Persisted $n batch_family_* directories to $OUTPUT_PERSIST"
+    n=$(ls -d "$BATCH_OUT"/*/ 2>/dev/null | wc -l)
+    echo "Persisted $n directories to $BATCH_OUT"
     echo "Persistence done: $(date)"
     echo "=================================="
     echo "Aggregate with:"
-    echo "  SCRATCH=$OUTPUT_PERSIST python3 ~/motif/benchmark/summarize_benchmark.py \\"
-    echo "    ~/motif/benchmark/benchmark_representative_monomers.tsv"
+    echo "  python3 ~/motif/benchmark/summarize_results.py \\"
+    echo "    ~/motif/benchmark/mcsa_representatives_parsed_monomers.tsv \\"
+    echo "    --scratch $BATCH_OUT"
     echo "=================================="
 }
 trap persist_results EXIT
@@ -60,7 +62,7 @@ echo "Node:       $(hostname)"
 echo "CPUs:       $SLURM_CPUS_PER_TASK"
 echo "SCRATCH:    $SCRATCH  (auto-deleted at job end)"
 echo "FAST:       $FAST"
-echo "Persist:    $OUTPUT_PERSIST"
+echo "Persist:    $BATCH_OUT"
 echo "Started:    $(date)"
 echo "=================================="
 
@@ -114,9 +116,9 @@ fi
 echo "=================================="
 
 cd ~/motif/benchmark
-bash run_full_pipeline.sh "$SLURM_CPUS_PER_TASK"
+bash run_batch.sh "$SLURM_CPUS_PER_TASK"
 pipeline_exit=$?
 
 echo "=================================="
-echo "run_full_pipeline.sh exited with code: $pipeline_exit"
+echo "run_batch.sh exited with code: $pipeline_exit"
 echo "Pipeline finished: $(date)"

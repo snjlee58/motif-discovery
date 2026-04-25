@@ -6,17 +6,17 @@ set -euo pipefail
 # Only need to rerun this when the pipeline itself changes (not for scoring tweaks).
 #
 # Usage:
-#   bash run_full_pipeline.sh [n_jobs]
+#   bash run_batch.sh [n_jobs]
 #
 # Example:
-#   bash run_full_pipeline.sh 8
+#   bash run_batch.sh 8
 
 N_JOBS=${1:-8}
-BENCHMARK_TSV="$HOME/motif/benchmark/benchmark_representative_monomers.tsv"
+BENCHMARK_TSV="$HOME/motif/benchmark/mcsa_representatives_parsed_monomers.tsv"
 
 if [ ! -f "$BENCHMARK_TSV" ]; then
     echo "ERROR: Benchmark list not found at $BENCHMARK_TSV"
-    echo "Generate it first with generate_benchmark_list.py"
+    echo "Generate it first with extract_pdb_list_from_mcsa.py"
     exit 1
 fi
 
@@ -31,10 +31,11 @@ echo "============================================"
 
 # Extract column 2 (PDB ID) and run pipeline.sh on each, N_JOBS at a time.
 # Using xargs -P rather than GNU parallel so it works without extra deps.
+# Per-PDB outputs land in $SCRATCH/batch/<PDB>/ — the `batch/` parent gives
+# the persist trap a clean glob target.
 tail -n +2 "$BENCHMARK_TSV" | cut -f2 | \
     xargs -P "$N_JOBS" -I{} bash -c \
-    'cd ~/motif && bash pipeline.sh "$1" "batch_family_$1" --quiet' _ {}
+    'cd ~/motif && bash pipeline.sh "$1" "batch/$1" --quiet' _ {}
 
 echo ""
-echo "Done! Results in \$SCRATCH/batch_family_*/"
-echo "Now run: bash run_benchmark_only.sh"
+echo "Done! Results in \$SCRATCH/batch/*/"

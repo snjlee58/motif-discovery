@@ -251,7 +251,7 @@ CACHED=$((TOTAL - NEED))
 echo "  $TOTAL total, $CACHED already cached, $NEED to download"
 
 # Parallel downloads. AFDB EBI handles tens of concurrent connections fine,
-# but if the surrounding batch (run_full_pipeline.sh) is also parallelizing
+# but if the surrounding batch (run_batch.sh) is also parallelizing
 # pipelines, lower this via DOWNLOAD_JOBS env var to avoid hammering the API.
 DOWNLOAD_JOBS=${DOWNLOAD_JOBS:-8}
 
