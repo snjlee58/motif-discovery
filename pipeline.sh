@@ -238,60 +238,44 @@ echo "[2] Downloading AlphaFold structures..."
 mkdir -p $SCRATCH/$OUTDIR/structures
 
 TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members.txt)
-DOWNLOADED=0
-FAILED=0
-FAILED_IDS=""
-COUNT=0
 
-# Live progress bar: write to /dev/tty when an interactive terminal is
-# actually usable; otherwise silently discard to /dev/null.
-# Note: `[ -w /dev/tty ]` is misleading — it checks permission bits, not whether
-# a controlling terminal exists. Under SLURM/quiet mode that test passes but the
-# actual write fails with "No such device or address". We probe by trying to
-# open /dev/tty for writing inside a subshell.
-BAR_OUT=/dev/null
-if [ "$QUIET" != "--quiet" ] && { : >/dev/tty; } 2>/dev/null; then
-  BAR_OUT=/dev/tty
-fi
-BAR_FULL="########################################"   # 40 chars
-BAR_EMPTY="----------------------------------------"  # 40 chars
-
-render_bar() {
-  local cur=$1 total=$2 ok=$3 fail=$4 width=40
-  local filled=$(( cur * width / total ))
-  local empty=$(( width - filled ))
-  local pct=$(( cur * 100 / total ))
-  printf '\r  [%s%s] %3d%% (%d/%d)  ok=%d fail=%d' \
-    "${BAR_FULL:0:$filled}" "${BAR_EMPTY:0:$empty}" \
-    "$pct" "$cur" "$total" "$ok" "$fail" > "$BAR_OUT"
-}
-
+# Build the to-do list (skip already-cached structures from prior runs).
+TODO_FILE="$SCRATCH/$OUTDIR/to_download.txt"
+> "$TODO_FILE"
 while read -r MEMBER_ID; do
-  COUNT=$((COUNT + 1))
   OUTFILE="$SCRATCH/$OUTDIR/structures/AF-${MEMBER_ID}-F1-model_v6.pdb"
-
-  if [ -f "$OUTFILE" ]; then
-    DOWNLOADED=$((DOWNLOADED + 1))
-  else
-    URL="https://alphafold.ebi.ac.uk/files/AF-${MEMBER_ID}-F1-model_v6.pdb"
-    if wget -q --timeout=10 -O "$OUTFILE" "$URL" 2>/dev/null; then
-      DOWNLOADED=$((DOWNLOADED + 1))
-    else
-      rm -f "$OUTFILE"
-      FAILED=$((FAILED + 1))
-      FAILED_IDS="${FAILED_IDS} ${MEMBER_ID}"
-    fi
-  fi
-
-  render_bar "$COUNT" "$TOTAL" "$DOWNLOADED" "$FAILED"
+  [ -f "$OUTFILE" ] || echo "$MEMBER_ID" >> "$TODO_FILE"
 done < $SCRATCH/$OUTDIR/cluster_members.txt
+NEED=$(wc -l < "$TODO_FILE")
+CACHED=$((TOTAL - NEED))
+echo "  $TOTAL total, $CACHED already cached, $NEED to download"
 
-# Terminate the \r-animation line on the terminal, then log the final summary
-[ "$BAR_OUT" = "/dev/tty" ] && printf '\n' > /dev/tty
-echo "  Done: downloaded=$DOWNLOADED  failed=$FAILED"
-if [ -n "$FAILED_IDS" ]; then
-  echo "  Failed IDs:$FAILED_IDS"
+# Parallel downloads. AFDB EBI handles tens of concurrent connections fine,
+# but if the surrounding batch (run_full_pipeline.sh) is also parallelizing
+# pipelines, lower this via DOWNLOAD_JOBS env var to avoid hammering the API.
+DOWNLOAD_JOBS=${DOWNLOAD_JOBS:-8}
+
+download_af_structure() {
+  local MEMBER_ID="$1"
+  local OUTFILE="$STRUCT_DIR/AF-${MEMBER_ID}-F1-model_v6.pdb"
+  local URL="https://alphafold.ebi.ac.uk/files/AF-${MEMBER_ID}-F1-model_v6.pdb"
+  wget -q --timeout=10 -O "$OUTFILE" "$URL" 2>/dev/null || rm -f "$OUTFILE"
+}
+export -f download_af_structure
+
+if [ "$NEED" -gt 0 ]; then
+  echo "  Downloading with $DOWNLOAD_JOBS parallel workers..."
+  STRUCT_DIR="$SCRATCH/$OUTDIR/structures"
+  export STRUCT_DIR
+
+  xargs -a "$TODO_FILE" -P "$DOWNLOAD_JOBS" -I{} bash -c 'download_af_structure "$@"' _ {}
 fi
+
+DOWNLOADED=$(ls "$SCRATCH/$OUTDIR/structures/"AF-*.pdb 2>/dev/null | wc -l)
+FAILED=$((TOTAL - DOWNLOADED))
+rm -f "$TODO_FILE"
+
+echo "  Done: downloaded=$DOWNLOADED  failed=$FAILED"
 
 # Add the experimental PDB structure for the query
 PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
@@ -329,8 +313,7 @@ echo "[3] Running FoldMason..."
 foldmason easy-msa \
   $SCRATCH/$OUTDIR/structures \
   $SCRATCH/$OUTDIR/foldmason_result \
-  $SCRATCH/tmp \
-  --report-mode 1
+  $SCRATCH/tmp
 
 MSA_FILE="$SCRATCH/$OUTDIR/foldmason_result_aa.fa"
 echo "  MSA file: $MSA_FILE"
@@ -369,22 +352,37 @@ echo "[5b] Running P2Rank binding site prediction..."
 P2RANK_JSON="$SCRATCH/$OUTDIR/p2rank_scores.json"
 PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
 
-if command -v prank &>/dev/null && [ -f "$PDB_FILE" ]; then
-  prank predict -f "$PDB_FILE" -o $SCRATCH/$OUTDIR/p2rank_output 2>/dev/null
-
-  # Find the residues CSV
-  P2RANK_CSV=$(find $SCRATCH/$OUTDIR/p2rank_output -name "*_residues.csv" | head -1)
-
-  if [ -n "$P2RANK_CSV" ]; then
-    python3 parse_p2rank.py "$P2RANK_CSV" -o "$P2RANK_JSON"
-    echo "  ✓ P2Rank scores saved to: p2rank_scores.json"
-  else
-    echo "  WARNING: P2Rank ran but no residues CSV found"
-    P2RANK_JSON=""
+# P2Rank is optional — any failure (missing binary, bad PDB, parser hiccup) must
+# not kill the pipeline. Use a function that returns non-zero on any failure,
+# then treat that as "P2Rank unavailable" and continue without binding-site data.
+run_p2rank() {
+  if ! command -v prank &>/dev/null; then
+    echo "  SKIP: prank not in PATH"
+    return 1
   fi
-else
-  echo "  WARNING: prank not found in PATH or PDB file missing"
-  echo "  Skipping P2Rank. Install and add to PATH."
+  if [ ! -f "$PDB_FILE" ]; then
+    echo "  SKIP: PDB file missing at $PDB_FILE"
+    return 1
+  fi
+  if ! prank predict -f "$PDB_FILE" -o "$SCRATCH/$OUTDIR/p2rank_output"; then
+    echo "  WARNING: prank predict failed"
+    return 1
+  fi
+  local csv
+  csv=$(find "$SCRATCH/$OUTDIR/p2rank_output" -name "*_residues.csv" 2>/dev/null | head -1)
+  if [ -z "$csv" ]; then
+    echo "  WARNING: prank ran but produced no residues CSV"
+    return 1
+  fi
+  if ! python3 parse_p2rank.py "$csv" -o "$P2RANK_JSON"; then
+    echo "  WARNING: parse_p2rank.py failed"
+    return 1
+  fi
+  echo "  ✓ P2Rank scores saved to: p2rank_scores.json"
+  return 0
+}
+
+if ! run_p2rank; then
   P2RANK_JSON=""
 fi
 
