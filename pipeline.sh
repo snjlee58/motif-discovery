@@ -205,7 +205,10 @@ fi
 
 
 # File 5 format: repId \t memId \t cluFlag \t taxId
-# Find the cluster representative for our protein (our protein is in col 2)
+#   cluFlag=1: AFDB50 representative (Foldseek-clustered) — kept for our MSA
+#   cluFlag=2: non-rep AFDB50 member (≥50% identical near-duplicate) — dropped
+# Filtering to cluFlag=1 gives a free 50%-identity dedup; cuts cluster size by
+# ~10x median for our M-CSA monomer set (analysis/cluster_sizes.tsv).
 REP_ID=$(grep "${UNIPROT_ID}" "$CLUSTER_FILE" | head -1 | cut -f1) || true
 
 if [ -z "$REP_ID" ]; then
@@ -216,13 +219,21 @@ fi
 
 echo "  Cluster representative: $REP_ID"
 
-# Get all members of that cluster (representative is in col 1)
-grep "^${REP_ID}" "$CLUSTER_FILE" | cut -f2 > $SCRATCH/$OUTDIR/cluster_members_all.txt
-N_TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members_all.txt)
-echo "  Total cluster members: $N_TOTAL"
-
-cp $SCRATCH/$OUTDIR/cluster_members_all.txt $SCRATCH/$OUTDIR/cluster_members.txt
-echo "  Using $N_TOTAL members"
+# AFDB50 reps only (cluFlag=1). Single awk pass writes the member list AND
+# counts both AFDB50 + full sizes — no second scan of the 1.9 GB file.
+COUNTS=$(awk -F'\t' -v rep="$REP_ID" -v out="$SCRATCH/$OUTDIR/cluster_members.txt" '
+  $1 == rep {
+    full++
+    if ($3 == 1) {
+      print $2 > out
+      afdb50++
+    }
+  }
+  END { printf "%d %d", afdb50+0, full+0 }
+' "$CLUSTER_FILE")
+N_AFDB50=$(echo "$COUNTS" | cut -d' ' -f1)
+N_FULL=$(echo "$COUNTS" | cut -d' ' -f2)
+echo "  Cluster members: $N_AFDB50 AFDB50 reps (of $N_FULL total) — using AFDB50 reps"
 
 #####################
 # STEP 2: Download AlphaFold structures for cluster members
