@@ -18,25 +18,19 @@ set -euo pipefail
 #     foldmason easy-msa cluster_members/
     # foldmason easy-msa beta_lactamase_cluster/ msaDB msa_result tmp
 
-# Prerequisites:
-#   1. Download AFDB cluster membership file:
-#  wget https://afdb-cluster.steineggerlab.workers.dev/1-AFDBClusters-entryId_repId_taxId.tsv.gz \
-#    -O $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz
-#  gunzip $SCRATCH/afdb_clusters/1-AFDBClusters-entryId_repId_taxId.tsv.gz
-#   2. (Optional) If you want ALL members including non-AFDB50:
-# wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz \
-#   -O $SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
-# gunzip $SCRATCH/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
-
 # Family View Pipeline
 # Instead of: query → foldseek search → hits → foldmason
 # We do:      query → find AFDB cluster → get all members → foldmason
 #
-# Prerequisites:
-#   1. Download AFDB cluster membership file:
-#      wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz \
-#        -O $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
-#      gunzip $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+# Prerequisites — AFDB cluster files (v6 to match AlphaFold v6 structures):
+#   mkdir -p $FAST/afdb_clusters/v6
+#   cd $FAST/afdb_clusters/v6
+#   wget https://afdb-cluster.steineggerlab.workers.dev/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+#   gunzip 5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+#
+# Optional companion files (for analysis/analyze_cluster_sizes.py):
+#   v6/1-AFDBClusters-repId_entryId_cluFlag_taxId.tsv.gz  (cluster info, smaller)
+#   v6/2-repId_isDark_nMem_repLen_avgLen_repPlddt_avgPlddt_LCAtaxId.tsv.gz  (per-cluster metadata)
 #
 # Usage:
 #   bash pipeline.sh <pdb_id> [output_dir] [--quiet]
@@ -67,7 +61,7 @@ PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 # Falls back to $SCRATCH for single-node setups where nothing has been moved yet.
 FAST="${FAST:-$SCRATCH}"
 
-CLUSTER_FILE="$FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
+CLUSTER_FILE="$FAST/afdb_clusters/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv"
 MCSA_FILE="$FAST/m-csa/catalytic_residues_homologues_parsed.tsv"
 PDB_CACHE="$FAST/pdb_files"
 mkdir -p "$PDB_CACHE"
@@ -184,9 +178,9 @@ echo "[1] Finding AFDB cluster for $UNIPROT_ID..."
 if [ ! -f "$CLUSTER_FILE" ]; then
   echo "ERROR: Cluster file not found at $CLUSTER_FILE"
   echo "Download it first (FAST=$FAST):"
-  echo "  mkdir -p $FAST/afdb_clusters"
-  echo "  wget https://afdb-cluster.steineggerlab.workers.dev/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz -O $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
-  echo "  gunzip $FAST/afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
+  echo "  mkdir -p $FAST/afdb_clusters/v6 && cd $FAST/afdb_clusters/v6"
+  echo "  wget https://afdb-cluster.steineggerlab.workers.dev/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
+  echo "  gunzip 5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
   exit 1
 fi
 

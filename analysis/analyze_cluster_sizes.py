@@ -4,20 +4,27 @@ Analyze AFDB cluster sizes for the PDBs in a benchmark TSV.
 
 For each PDB:
   1. Resolve PDB → UniProt via UniProt ID Mapping API (one bulk call).
-  2. Look up the UniProt's AFDB cluster representative.
-  3. Count cluster members.
+  2. Look up the UniProt's AFDB cluster representative (file 5).
+  3. Count cluster members, broken down by cluFlag:
+       - cluFlag=1: AFDB50 reps (Foldseek-clustered) — the 50%-identity dedup
+       - cluFlag=2: non-rep AFDB50 members (near-duplicates of their AFDB50 rep)
+  4. Optionally enrich with file 2 metadata (avg pLDDT, LCA taxon, etc.)
 
 Outputs:
-  - <output>.tsv with per-PDB cluster sizes (sorted largest first).
-  - Summary stats + ASCII histogram printed to stdout.
+  - <output>.tsv with per-PDB cluster sizes + dedup ratio + metadata
+  - Summary stats + ASCII histograms (full vs AFDB50-rep-only)
 
 Usage (from repo root):
     python3 analysis/analyze_cluster_sizes.py \
         benchmark/mcsa_representatives_parsed_monomers.tsv \
         --output analysis/cluster_sizes.tsv
 
-The cluster file path defaults to $FAST/afdb_clusters/5-allmembers-...tsv
-(same convention as pipeline.sh).
+Cluster files default to $FAST/afdb_clusters/v6/. If file 2 (cluster overview) is
+missing, metadata columns are skipped — only the cluster-size analysis runs.
+File 2 download (v6 — match AlphaFold v6 structures used by pipeline.sh):
+    cd $FAST/afdb_clusters/v6
+    wget https://afdb-cluster.steineggerlab.workers.dev/v6/2-repId_isDark_nMem_repLen_avgLen_repPlddt_avgPlddt_LCAtaxId.tsv.gz
+    gunzip 2-repId_isDark_nMem_repLen_avgLen_repPlddt_avgPlddt_LCAtaxId.tsv.gz
 """
 
 import argparse
@@ -107,13 +114,19 @@ def fetch_results(job_id, max_wait=180):
 
 
 def scan_cluster_file(cluster_file, target_uniprots):
-    """Single pass through the cluster file.
+    """Single pass through file 5.
+
+    Counts members per rep, split by cluFlag:
+      - cluFlag=1: AFDB50 representatives (Foldseek-clustered) — the 50%-identity dedup
+      - cluFlag=2: non-rep AFDB50 members (near-duplicates of an AFDB50 rep)
 
     Returns:
-      cluster_sizes: Counter {rep_id: member_count} for ALL clusters
-      uniprot_to_rep: {uniprot: rep_id} for target uniprots only
+      sizes_full: Counter {rep_id: total member count}
+      sizes_afdb50: Counter {rep_id: cluFlag=1 count}
+      uniprot_to_rep: {uniprot: rep_id} for targets only
     """
-    cluster_sizes = Counter()
+    sizes_full = Counter()
+    sizes_afdb50 = Counter()
     uniprot_to_rep = {}
 
     print(f"Scanning {cluster_file}...", file=sys.stderr)
@@ -121,10 +134,12 @@ def scan_cluster_file(cluster_file, target_uniprots):
     with open(cluster_file) as f:
         for line in f:
             parts = line.rstrip('\n').split('\t')
-            if len(parts) < 2:
+            if len(parts) < 3:
                 continue
-            rep, mem = parts[0], parts[1]
-            cluster_sizes[rep] += 1
+            rep, mem, clu_flag = parts[0], parts[1], parts[2]
+            sizes_full[rep] += 1
+            if clu_flag == '1':
+                sizes_afdb50[rep] += 1
             if mem in target_uniprots and mem not in uniprot_to_rep:
                 uniprot_to_rep[mem] = rep
             n_rows += 1
@@ -132,9 +147,45 @@ def scan_cluster_file(cluster_file, target_uniprots):
                 print(f"  {n_rows:>12,} rows · {len(uniprot_to_rep)}/{len(target_uniprots)} targets found",
                       file=sys.stderr)
 
-    print(f"Done. {n_rows:,} rows · {len(cluster_sizes):,} unique clusters.",
+    print(f"Done. {n_rows:,} rows · {len(sizes_full):,} unique clusters.",
           file=sys.stderr)
-    return cluster_sizes, uniprot_to_rep
+    return sizes_full, sizes_afdb50, uniprot_to_rep
+
+
+def load_cluster_overview(file_path, target_reps):
+    """Load file 2 cluster overview for target reps.
+
+    Format: repId, isDark, nMem, repLen, avgLen, repPlddt, avgPlddt, LCAtaxID
+
+    Returns: {rep_id: {nMem, isDark, avgLen, avgPlddt, LCAtaxID}} or {} if file missing.
+    """
+    if not Path(file_path).exists():
+        print(f"File 2 not found at {file_path} — skipping metadata enrichment",
+              file=sys.stderr)
+        return {}
+
+    print(f"Loading cluster metadata from {file_path}...", file=sys.stderr)
+    overview = {}
+    with open(file_path) as f:
+        for line in f:
+            parts = line.rstrip('\n').split('\t')
+            if len(parts) < 8:
+                continue
+            rep = parts[0]
+            if rep in target_reps:
+                try:
+                    overview[rep] = {
+                        'isDark': parts[1],
+                        'nMem': int(parts[2]),
+                        'avgLen': float(parts[4]),
+                        'avgPlddt': float(parts[6]),
+                        'LCAtaxID': parts[7],
+                    }
+                except (ValueError, IndexError):
+                    continue
+    print(f"  metadata for {len(overview)}/{len(target_reps)} target clusters",
+          file=sys.stderr)
+    return overview
 
 
 def histogram(values):
@@ -155,14 +206,35 @@ def histogram(values):
         print(f"  {lo:>5}-{hi:<10}{n:>8}  {bar}")
 
 
+def stats(label, values):
+    """Print summary stats for a list of cluster sizes."""
+    if not values:
+        return
+    s = sorted(values)
+    n = len(s)
+    print(f"{label}:")
+    print(f"  Min:    {min(s):>10,}")
+    print(f"  Median: {s[n // 2]:>10,}")
+    print(f"  Mean:   {sum(s) / n:>10,.1f}")
+    print(f"  Max:    {max(s):>10,}")
+    print(f"  P90:    {s[int(n * 0.9)]:>10,}")
+    print(f"  P95:    {s[int(n * 0.95)]:>10,}")
+    print(f"  P99:    {s[int(n * 0.99)]:>10,}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('tsv', help='Benchmark TSV (mcsa_id, pdb_id, n_catalytic_residues)')
     parser.add_argument('--cluster-file',
                         default=os.path.join(
                             os.environ.get('FAST', '/fast/sunny'),
-                            'afdb_clusters/5-allmembers-repId-entryId-cluFlag-taxId.tsv'),
-                        help='AFDB 5-allmembers cluster file')
+                            'afdb_clusters/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv'),
+                        help='AFDB file 5: all members')
+    parser.add_argument('--cluster-overview',
+                        default=os.path.join(
+                            os.environ.get('FAST', '/fast/sunny'),
+                            'afdb_clusters/v6/2-repId_isDark_nMem_repLen_avgLen_repPlddt_avgPlddt_LCAtaxId.tsv'),
+                        help='AFDB file 2: per-cluster overview (optional)')
     parser.add_argument('--output', default='analysis/cluster_sizes.tsv',
                         help='Output TSV (default: analysis/cluster_sizes.tsv)')
     parser.add_argument('--top', type=int, default=20,
@@ -190,12 +262,18 @@ def main():
 
     target_uniprots = set(pdb_to_uniprot.values())
 
-    # Single-pass cluster file scan
-    cluster_sizes, uniprot_to_rep = scan_cluster_file(args.cluster_file, target_uniprots)
+    # Single-pass file 5 scan with cluFlag breakdown
+    sizes_full, sizes_afdb50, uniprot_to_rep = scan_cluster_file(
+        args.cluster_file, target_uniprots)
+
+    # File 2 metadata (optional — gracefully skipped if absent)
+    target_reps = set(uniprot_to_rep.values())
+    overview = load_cluster_overview(args.cluster_overview, target_reps)
 
     # Build output rows
     rows = []
-    sizes = []
+    full_vals = []
+    afdb50_vals = []
     not_in_afdb = []
     no_uniprot = []
     for p in proteins:
@@ -203,55 +281,88 @@ def main():
         uniprot = pdb_to_uniprot.get(pdb.lower(), '')
         if not uniprot:
             no_uniprot.append(pdb)
-            rep, size = '', 0
+            rep = ''
+            full_size = afdb50_size = 0
         else:
             rep = uniprot_to_rep.get(uniprot, '')
-            size = cluster_sizes.get(rep, 0) if rep else 0
-            if size == 0:
+            full_size = sizes_full.get(rep, 0) if rep else 0
+            afdb50_size = sizes_afdb50.get(rep, 0) if rep else 0
+            if full_size == 0:
                 not_in_afdb.append(pdb)
+
+        meta = overview.get(rep, {})
+        ratio = (full_size / afdb50_size) if afdb50_size else 0.0
         rows.append({
             'mcsa_id': p['mcsa_id'],
             'pdb_id': pdb,
             'uniprot': uniprot or 'NOT_FOUND',
             'rep_id': rep or 'NOT_FOUND',
-            'cluster_size': size,
+            'cluster_size_full': full_size,
+            'cluster_size_afdb50': afdb50_size,
+            'dedup_ratio': f"{ratio:.2f}" if ratio else '',
+            'nMem_file2': meta.get('nMem', ''),
+            'avg_seq_len': f"{meta.get('avgLen'):.1f}" if 'avgLen' in meta else '',
+            'avg_pLDDT': f"{meta.get('avgPlddt'):.1f}" if 'avgPlddt' in meta else '',
+            'isDark': meta.get('isDark', ''),
+            'LCA_taxID': meta.get('LCAtaxID', ''),
         })
-        if size > 0:
-            sizes.append(size)
+        if full_size > 0:
+            full_vals.append(full_size)
+            if afdb50_size > 0:
+                afdb50_vals.append(afdb50_size)
 
-    rows.sort(key=lambda r: -r['cluster_size'])
+    rows.sort(key=lambda r: -r['cluster_size_full'])
 
     # Write output
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ['mcsa_id', 'pdb_id', 'uniprot', 'rep_id',
+                  'cluster_size_full', 'cluster_size_afdb50', 'dedup_ratio',
+                  'nMem_file2', 'avg_seq_len', 'avg_pLDDT', 'isDark', 'LCA_taxID']
     with open(args.output, 'w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=['mcsa_id', 'pdb_id', 'uniprot', 'rep_id', 'cluster_size'],
-                           delimiter='\t')
+        w = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')
         w.writeheader()
         w.writerows(rows)
     print(f"\nWrote {args.output}", file=sys.stderr)
 
     # Summary
-    if sizes:
-        s = sorted(sizes)
-        n = len(s)
+    if full_vals:
+        n = len(full_vals)
         print()
         print("=" * 70)
         print(f"Cluster size summary  ({n}/{len(proteins)} PDBs resolved to AFDB cluster)")
         print("=" * 70)
-        print(f"  Min:    {min(s):>10,}")
-        print(f"  Median: {s[n // 2]:>10,}")
-        print(f"  Mean:   {sum(s) / n:>10,.1f}")
-        print(f"  Max:    {max(s):>10,}")
-        print(f"  P90:    {s[int(n * 0.9)]:>10,}")
-        print(f"  P95:    {s[int(n * 0.95)]:>10,}")
-        print(f"  P99:    {s[int(n * 0.99)]:>10,}")
-        histogram(sizes)
+        stats("Full cluster size (file 5, all members)", full_vals)
+        print()
+        stats("AFDB50-rep-only size (cluFlag=1, the 'free dedup')", afdb50_vals)
+
+        # Dedup ratios
+        ratios = [a / b for a, b in zip(full_vals, afdb50_vals) if b > 0]
+        if ratios:
+            rs = sorted(ratios)
+            n = len(rs)
+            print()
+            print(f"Dedup ratio (full / afdb50) — how much you save by filtering to cluFlag=1:")
+            print(f"  Median: {rs[n // 2]:>6.2f}x")
+            print(f"  Mean:   {sum(rs) / n:>6.2f}x")
+            print(f"  Max:    {max(rs):>6.2f}x")
+
+        # Histograms — both for direct comparison
+        print()
+        print("Distribution: FULL cluster size")
+        histogram(full_vals)
+        print()
+        print("Distribution: AFDB50-rep-only size")
+        histogram(afdb50_vals)
 
         print()
-        print(f"Top {args.top} largest clusters:")
-        print(f"  {'PDB':<8}{'UniProt':<12}{'Cluster size':>14}")
+        print(f"Top {args.top} largest (sorted by full size):")
+        print(f"  {'PDB':<8}{'UniProt':<12}{'Full':>10}{'AFDB50':>10}{'Ratio':>8}{'avgPlddt':>10}")
         for r in rows[:args.top]:
-            print(f"  {r['pdb_id']:<8}{r['uniprot']:<12}{r['cluster_size']:>14,}")
+            ratio_str = r['dedup_ratio'] or '-'
+            plddt = r['avg_pLDDT'] or '-'
+            print(f"  {r['pdb_id']:<8}{r['uniprot']:<12}"
+                  f"{r['cluster_size_full']:>10,}{r['cluster_size_afdb50']:>10,}"
+                  f"{ratio_str:>8}{plddt:>10}")
 
     if no_uniprot:
         print(f"\n{len(no_uniprot)} PDBs failed UniProt resolution: "
