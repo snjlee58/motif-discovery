@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -34,6 +35,7 @@ from urllib import parse, request
 UNIPROT_RUN = "https://rest.uniprot.org/idmapping/run"
 UNIPROT_STATUS = "https://rest.uniprot.org/idmapping/status/"
 UNIPROT_RESULTS = "https://rest.uniprot.org/idmapping/results/"
+PAGE_SIZE = 500  # UniProt's max page size for paginated results
 
 
 def submit_pdb_to_uniprot(pdb_ids):
@@ -64,11 +66,11 @@ def parse_results(results):
 
 
 def fetch_results(job_id, max_wait=180):
-    """Wait for job completion, then fetch ALL results via stream endpoint.
+    """Wait for job, then fetch ALL results via paginated endpoint.
 
-    The /idmapping/status/ endpoint paginates (default 25/page) and would silently
-    truncate results — so once the job finishes, always pull from /results/stream/
-    which returns everything in one response.
+    /idmapping/status/ silently caps responses at 25 entries (default page size),
+    so we wait for completion and then walk the paginated /results/ endpoint with
+    size=500, following the Link header for additional pages.
     """
     start = time.time()
     while time.time() - start < max_wait:
@@ -76,7 +78,6 @@ def fetch_results(job_id, max_wait=180):
             with request.urlopen(f"{UNIPROT_STATUS}{job_id}", timeout=30) as resp:
                 data = json.loads(resp.read())
             status = data.get('jobStatus')
-            # Job is done when status is FINISHED, missing, or response carries results
             if status in (None, 'FINISHED') or 'results' in data or 'redirectURL' in data:
                 break
             if status in ('RUNNING', 'NEW'):
@@ -88,13 +89,21 @@ def fetch_results(job_id, max_wait=180):
     else:
         raise TimeoutError(f"UniProt job {job_id} did not complete in {max_wait}s")
 
-    # Pull ALL results, not just first page
-    url = f"{UNIPROT_RESULTS}stream/{job_id}?format=json"
-    with request.urlopen(url, timeout=120) as resp:
-        data = json.loads(resp.read())
-    results = data.get('results', [])
-    print(f"  fetched {len(results)} mappings via stream endpoint", file=sys.stderr)
-    return parse_results(results)
+    all_results = []
+    url = f"{UNIPROT_RESULTS}{job_id}?format=json&size={PAGE_SIZE}"
+    page = 0
+    while url:
+        page += 1
+        with request.urlopen(url, timeout=60) as resp:
+            data = json.loads(resp.read())
+            link_header = resp.headers.get('Link', '')
+        all_results.extend(data.get('results', []))
+        m = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
+        url = m.group(1) if m else None
+
+    print(f"  fetched {len(all_results)} mappings ({page} page{'s' if page != 1 else ''})",
+          file=sys.stderr)
+    return parse_results(all_results)
 
 
 def scan_cluster_file(cluster_file, target_uniprots):
