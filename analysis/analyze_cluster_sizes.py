@@ -64,33 +64,37 @@ def parse_results(results):
 
 
 def fetch_results(job_id, max_wait=180):
-    """Poll for job completion, fetch results. Returns {pdb_lower: uniprot}."""
+    """Wait for job completion, then fetch ALL results via stream endpoint.
+
+    The /idmapping/status/ endpoint paginates (default 25/page) and would silently
+    truncate results — so once the job finishes, always pull from /results/stream/
+    which returns everything in one response.
+    """
     start = time.time()
     while time.time() - start < max_wait:
         try:
             with request.urlopen(f"{UNIPROT_STATUS}{job_id}", timeout=30) as resp:
                 data = json.loads(resp.read())
-            if data.get('results'):
-                return parse_results(data['results'])
-            if data.get('jobStatus') == 'RUNNING':
+            status = data.get('jobStatus')
+            # Job is done when status is FINISHED, missing, or response carries results
+            if status in (None, 'FINISHED') or 'results' in data or 'redirectURL' in data:
+                break
+            if status in ('RUNNING', 'NEW'):
                 time.sleep(2)
                 continue
         except Exception as e:
             print(f"  status check failed: {e}", file=sys.stderr)
+            time.sleep(2)
+    else:
+        raise TimeoutError(f"UniProt job {job_id} did not complete in {max_wait}s")
 
-        # Fallback: stream endpoint
-        try:
-            url = f"{UNIPROT_RESULTS}stream/{job_id}?format=json"
-            with request.urlopen(url, timeout=60) as resp:
-                data = json.loads(resp.read())
-            if data.get('results'):
-                return parse_results(data['results'])
-        except Exception as e:
-            print(f"  stream fetch failed: {e}", file=sys.stderr)
-
-        time.sleep(2)
-
-    raise TimeoutError(f"UniProt job {job_id} did not complete in {max_wait}s")
+    # Pull ALL results, not just first page
+    url = f"{UNIPROT_RESULTS}stream/{job_id}?format=json"
+    with request.urlopen(url, timeout=120) as resp:
+        data = json.loads(resp.read())
+    results = data.get('results', [])
+    print(f"  fetched {len(results)} mappings via stream endpoint", file=sys.stderr)
+    return parse_results(results)
 
 
 def scan_cluster_file(cluster_file, target_uniprots):
