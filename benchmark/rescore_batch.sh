@@ -9,13 +9,21 @@ set -euo pipefail
 # fresh per-PDB result JSONs + a summary into <batch_dir>/rescore_<TS>/.
 #
 # Usage:
-#   bash run_benchmark_only.sh <batch_dir> [n_jobs]
+#   bash rescore_batch.sh <batch_dir> [n_jobs]
 #
 # Example:
-#   bash run_benchmark_only.sh /fast/sunny/motif/batch_runs/260426_022540_job527234 8
+#   bash rescore_batch.sh /fast/sunny/motif/batch_runs/260426_022540_job527234 8
+#
+# Top-N comparison:
+#   TOP_N_MULTIPLIERS=1,2,3 bash rescore_batch.sh <batch_dir>
 
-BATCH_DIR=${1:?"Usage: bash run_benchmark_only.sh <batch_dir> [n_jobs]"}
+BATCH_DIR=${1:?"Usage: bash rescore_batch.sh <batch_dir> [n_jobs]"}
 N_JOBS=${2:-8}
+
+# Env-var knob: comma-separated multipliers like "1,2,3" to compare top-N as
+# multiplier × num_true_residues per PDB. Empty (default) preserves the legacy
+# single top-N behaviour.
+TOP_N_MULTIPLIERS="${TOP_N_MULTIPLIERS:-}"
 
 MOTIF_DIR="$HOME/motif"
 FAST="${FAST:-/fast/sunny}"
@@ -23,6 +31,7 @@ MCSA_FILE="$FAST/m-csa/catalytic_residues_homologues_parsed.tsv"
 PDB_CACHE="$FAST/pdb_files"
 TIMESTAMP=$(date +%y%m%d_%H%M%S)
 RESULTS_DIR="$BATCH_DIR/rescore_${TIMESTAMP}"
+[ -n "$TOP_N_MULTIPLIERS" ] && RESULTS_DIR="${RESULTS_DIR}_topn${TOP_N_MULTIPLIERS//,/-}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -57,6 +66,7 @@ echo "  Entries:  $TOTAL"
 echo "  Jobs:     $N_JOBS parallel"
 echo "  Output:   $RESULTS_DIR/"
 echo "  M-CSA:    $MCSA_FILE"
+[ -n "$TOP_N_MULTIPLIERS" ] && echo "  Top-N comparison multipliers: $TOP_N_MULTIPLIERS"
 echo "============================================"
 
 TMPFILE=$(mktemp)
@@ -74,12 +84,16 @@ cat "$TMPFILE" | parallel --progress -j "$N_JOBS" '
     PDB_FILE="'"$PDB_CACHE"'/${PDB_ID}.pdb"
     MCSA="'"$MCSA_FILE"'"
     OUTDIR="'"$RESULTS_DIR"'"
+    SWEEP="'"$TOP_N_MULTIPLIERS"'"
 
     P2RANK_ARG=""
     [ -f "$P2RANK" ] && P2RANK_ARG="--p2rank-json $P2RANK"
 
     PDB_ARG=""
     [ -f "$PDB_FILE" ] && PDB_ARG="--pdb-file $PDB_FILE"
+
+    SWEEP_ARG=""
+    [ -n "$SWEEP" ] && SWEEP_ARG="--top-n-multipliers $SWEEP"
 
     cd '"$MOTIF_DIR"' && python3 src/benchmark_mcsa.py \
         "$CONS" "$MCSA" "$MAP" \
@@ -89,6 +103,7 @@ cat "$TMPFILE" | parallel --progress -j "$N_JOBS" '
         --catalytic-propensity \
         $P2RANK_ARG \
         $PDB_ARG \
+        $SWEEP_ARG \
         --min-identity 0.2 \
         --output "$OUTDIR/${PDB_ID}.json" \
         2>/dev/null

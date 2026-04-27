@@ -543,6 +543,12 @@ def main():
                         help='Also include homologue entries (default: references only)')
     parser.add_argument('--top-n', default='auto',
                         help='Top N predictions. "auto" matches ground truth count (default: auto)')
+    parser.add_argument('--top-n-multipliers', default=None,
+                        help='Comma-separated multipliers (e.g. "1,2,3") to compare top-N as '
+                             'multiplier × num_true_residues. When set, computes metrics for each '
+                             'multiplier in one pass and outputs all under "metrics_by_top_n". '
+                             'Lets you separate "missing the residues entirely" (no recall jump '
+                             'at higher N) from "ranking them too low" (recall improves with N).')
     parser.add_argument('--conservation-threshold', type=float, default=None,
                         help='Conservation score threshold (overrides --top-n). '
                              'E.g., 0.6 selects all residues with conservation >= 0.6')
@@ -604,40 +610,70 @@ def main():
             p2rank_scores = p2rank_data.get('residues', {})
         print(f"  Loaded scores for {len(p2rank_scores)} residues")
     
-    # Get predictions
-    predicted_positions = get_top_conserved_positions(
-        conservation_data,
-        alignment_mapping,
-        top_n=top_n if top_n else len(true_positions),
-        conservation_threshold=args.conservation_threshold,
-        exclude_gaps=args.exclude_gaps,
-        min_identity=args.min_identity,
-        exclude_structural=args.exclude_structural,
-        use_catalytic_propensity=args.catalytic_propensity,
-        p2rank_scores=p2rank_scores,
-        pdb_file=args.pdb_file
-    )
-    
-    # Calculate metrics
-    metrics = calculate_metrics(predicted_positions, true_positions)
-    
-    # Print results
+    # Build the list of top-N values to evaluate.
+    # Single value (default) preserves the legacy output shape; multipliers
+    # produce multiple runs saved under "metrics_by_top_n".
+    n_true = len(true_positions)
+    if args.top_n_multipliers:
+        multipliers = [float(m) for m in args.top_n_multipliers.split(',')]
+        runs = [(f"{m:g}x", max(1, int(round(m * n_true)))) for m in multipliers]
+    else:
+        runs = [("primary", top_n if top_n else n_true)]
+
+    run_results = {}
+    for label, n in runs:
+        predicted = get_top_conserved_positions(
+            conservation_data,
+            alignment_mapping,
+            top_n=n,
+            conservation_threshold=args.conservation_threshold,
+            exclude_gaps=args.exclude_gaps,
+            min_identity=args.min_identity,
+            exclude_structural=args.exclude_structural,
+            use_catalytic_propensity=args.catalytic_propensity,
+            p2rank_scores=p2rank_scores,
+            pdb_file=args.pdb_file
+        )
+        m = calculate_metrics(predicted, true_positions)
+        run_results[label] = {'top_n': n, 'predicted': sorted(predicted), 'metrics': m}
+
+    # Backward-compat: "primary" is whatever was the single requested top-N
+    # (or the first run when multipliers are used).
+    primary_label = "primary" if "primary" in run_results else runs[0][0]
+    primary = run_results[primary_label]
+    predicted_positions = primary['predicted']
+    metrics = primary['metrics']
+
+    # Print results for the primary value (keep existing console output)
     print_results(predicted_positions, true_positions, metrics, conservation_data, alignment_mapping)
-    
+
+    # Print compact comparison table if applicable
+    if args.top_n_multipliers:
+        print(f"\nTop-N comparison (n_true = {n_true}):")
+        print(f"  {'label':<6} {'top_n':>6} {'P':>6} {'R':>6} {'F1':>6} {'TP':>4}")
+        for label, _ in runs:
+            r = run_results[label]
+            mm = r['metrics']
+            print(f"  {label:<6} {r['top_n']:>6} {mm['precision']:>6.3f} "
+                  f"{mm['recall']:>6.3f} {mm['f1']:>6.3f} {mm['tp']:>4}")
+
     # Save to file if requested
     if args.output:
         results = {
             'pdb_id': args.pdb_id,
-            'top_n': top_n,
+            'top_n': primary['top_n'],
             'conservation_threshold': args.conservation_threshold,
             'mcsa_ground_truth': sorted(true_positions),
-            'predicted': sorted(predicted_positions),
+            'predicted': predicted_positions,
             'metrics': metrics,
             'parameters': {
                 'exclude_gaps': args.exclude_gaps,
                 'min_identity': args.min_identity
             }
         }
+        if args.top_n_multipliers:
+            results['n_true'] = n_true
+            results['metrics_by_top_n'] = run_results
         with open(args.output, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"\nSaved results to: {args.output}")

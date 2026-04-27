@@ -24,7 +24,7 @@ flowchart TD
     PS --> Out[(per-PDB results dir<br/>baseline_performance.json<br/>top5_motif.txt<br/>conservation.json<br/>alignment_mapping.json<br/>...)]
 
     Out -.aggregate.-> SR2[benchmark/summarize_results.py]
-    Out -.re-score only.-> RBO[benchmark/run_benchmark_only.sh]
+    Out -.re-score only.-> RBO[benchmark/rescore_batch.sh]
 
     SR2 --> Table[/F1 / Precision / Recall<br/>summary table/]
     RBO --> RescoreOut[(rescore_TS/<br/>fresh JSONs + summary)]
