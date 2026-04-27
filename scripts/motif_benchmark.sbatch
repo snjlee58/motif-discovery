@@ -15,6 +15,11 @@
 # grace period before SIGKILL).
 #
 # Submit with: sbatch scripts/motif_benchmark.sbatch
+#
+# Retry mode — re-run only PDBs missing from a previous batch:
+#   RETRY_BATCH_DIR=/fast/sunny/motif/batch_runs/<old_dir> \
+#     PIPELINE_TIMEOUT=7200 sbatch scripts/motif_benchmark.sbatch
+# In retry mode, results merge into the existing batch dir (no new dir created).
 
 # Note: no -e — we want persistence to run even if the pipeline fails.
 set -uo pipefail
@@ -26,9 +31,19 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate motif
 
 export FAST="/fast/sunny"
-TS=$(date +%y%m%d_%H%M%S)
-BATCH_OUT="/fast/sunny/motif/batch_runs/${TS}_job${SLURM_JOB_ID}"
-mkdir -p "$BATCH_OUT"
+
+# Retry mode: persist into the existing batch dir and skip already-done PDBs.
+# Otherwise: create a new dated/job-tagged dir as usual.
+if [ -n "${RETRY_BATCH_DIR:-}" ]; then
+    BATCH_OUT="$RETRY_BATCH_DIR"
+    [ ! -d "$BATCH_OUT" ] && { echo "ERROR: RETRY_BATCH_DIR not found: $BATCH_OUT"; exit 1; }
+    export SKIP_EXISTING="$BATCH_OUT"
+    echo "RETRY MODE: merging into $BATCH_OUT (already-completed PDBs will be skipped)"
+else
+    TS=$(date +%y%m%d_%H%M%S)
+    BATCH_OUT="/fast/sunny/motif/batch_runs/${TS}_job${SLURM_JOB_ID}"
+    mkdir -p "$BATCH_OUT"
+fi
 
 persist_results() {
     echo ""
