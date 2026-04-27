@@ -72,42 +72,45 @@ echo "============================================"
 TMPFILE=$(mktemp)
 printf '%s\n' "${DIRS[@]}" > "$TMPFILE"
 
-# Run benchmark_mcsa.py in parallel
-cat "$TMPFILE" | parallel --progress -j "$N_JOBS" '
-    PDB_ID={}
-    PDB_LOWER=$(echo "$PDB_ID" | tr "[:upper:]" "[:lower:]")
-    DIR="'"$BATCH_DIR"'/${PDB_ID}"
+# Run benchmark_mcsa.py in parallel via xargs (no GNU parallel dep needed).
+# Define a worker function and export it + the env it needs to xargs's subshells.
+rescore_one() {
+    local PDB_ID="$1"
+    local PDB_LOWER
+    PDB_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
+    local DIR="$BATCH_DIR/$PDB_ID"
 
-    CONS="$DIR/${PDB_LOWER}_conservation.json"
-    MAP="$DIR/alignment_mapping.json"
-    P2RANK="$DIR/p2rank_scores.json"
-    PDB_FILE="'"$PDB_CACHE"'/${PDB_ID}.pdb"
-    MCSA="'"$MCSA_FILE"'"
-    OUTDIR="'"$RESULTS_DIR"'"
-    SWEEP="'"$TOP_N_MULTIPLIERS"'"
+    local CONS="$DIR/${PDB_LOWER}_conservation.json"
+    local MAP="$DIR/alignment_mapping.json"
+    local P2RANK="$DIR/p2rank_scores.json"
+    local PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
 
-    P2RANK_ARG=""
+    local P2RANK_ARG=""
     [ -f "$P2RANK" ] && P2RANK_ARG="--p2rank-json $P2RANK"
 
-    PDB_ARG=""
+    local PDB_ARG=""
     [ -f "$PDB_FILE" ] && PDB_ARG="--pdb-file $PDB_FILE"
 
-    SWEEP_ARG=""
-    [ -n "$SWEEP" ] && SWEEP_ARG="--top-n-multipliers $SWEEP"
+    local MULT_ARG=""
+    [ -n "$TOP_N_MULTIPLIERS" ] && MULT_ARG="--top-n-multipliers $TOP_N_MULTIPLIERS"
 
-    cd '"$MOTIF_DIR"' && python3 src/benchmark_mcsa.py \
-        "$CONS" "$MCSA" "$MAP" \
+    cd "$MOTIF_DIR" && python3 src/benchmark_mcsa.py \
+        "$CONS" "$MCSA_FILE" "$MAP" \
         --pdb-id "$PDB_LOWER" \
         --top-n auto \
         --exclude-gaps \
         --catalytic-propensity \
         $P2RANK_ARG \
         $PDB_ARG \
-        $SWEEP_ARG \
+        $MULT_ARG \
         --min-identity 0.2 \
-        --output "$OUTDIR/${PDB_ID}.json" \
+        --output "$RESULTS_DIR/${PDB_ID}.json" \
         2>/dev/null
-'
+}
+export -f rescore_one
+export BATCH_DIR PDB_CACHE MCSA_FILE RESULTS_DIR TOP_N_MULTIPLIERS MOTIF_DIR
+
+xargs -a "$TMPFILE" -P "$N_JOBS" -I{} bash -c 'rescore_one "$@"' _ {}
 
 rm -f "$TMPFILE"
 
