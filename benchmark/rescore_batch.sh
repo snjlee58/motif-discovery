@@ -25,6 +25,14 @@ N_JOBS=${2:-8}
 # single top-N behaviour.
 TOP_N_MULTIPLIERS="${TOP_N_MULTIPLIERS:-}"
 
+# Extra args passed straight to benchmark_mcsa.py (e.g. ablation flags).
+# Example: BENCH_EXTRA_ARGS="--disable-signals p2rank,3di"
+BENCH_EXTRA_ARGS="${BENCH_EXTRA_ARGS:-}"
+
+# Optional tag appended to the rescore dir name so ablation runs don't
+# collide when launched within the same second.
+RESCORE_TAG="${RESCORE_TAG:-}"
+
 MOTIF_DIR="$HOME/motif"
 FAST="${FAST:-/fast/sunny}"
 MCSA_FILE="$FAST/m-csa/catalytic_residues_homologues_parsed.tsv"
@@ -32,6 +40,7 @@ PDB_CACHE="$FAST/pdb_files"
 TIMESTAMP=$(date +%y%m%d_%H%M%S)
 RESULTS_DIR="$BATCH_DIR/rescore_${TIMESTAMP}"
 [ -n "$TOP_N_MULTIPLIERS" ] && RESULTS_DIR="${RESULTS_DIR}_topn${TOP_N_MULTIPLIERS//,/-}"
+[ -n "$RESCORE_TAG" ] && RESULTS_DIR="${RESULTS_DIR}_${RESCORE_TAG}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -103,12 +112,13 @@ rescore_one() {
         $P2RANK_ARG \
         $PDB_ARG \
         $MULT_ARG \
+        $BENCH_EXTRA_ARGS \
         --min-identity 0.2 \
         --output "$RESULTS_DIR/${PDB_ID}.json" \
         2>/dev/null
 }
 export -f rescore_one
-export BATCH_DIR PDB_CACHE MCSA_FILE RESULTS_DIR TOP_N_MULTIPLIERS MOTIF_DIR
+export BATCH_DIR PDB_CACHE MCSA_FILE RESULTS_DIR TOP_N_MULTIPLIERS BENCH_EXTRA_ARGS MOTIF_DIR
 
 xargs -a "$TMPFILE" -P "$N_JOBS" -I{} bash -c 'rescore_one "$@"' _ {}
 

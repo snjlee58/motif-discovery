@@ -187,7 +187,8 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                                 exclude_structural: bool = False,
                                 use_catalytic_propensity: bool = False,
                                 p2rank_scores: Dict = None,
-                                pdb_file: str = None) -> List[int]:
+                                pdb_file: str = None,
+                                disable_signals: Set[str] = None) -> List[int]:
     """
     Extract top conserved positions mapped to PDB residue IDs.
     
@@ -310,6 +311,12 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         W_PROPENSITY = 0.25
         W_3DI = 0.30
 
+        ds = disable_signals or set()
+        if 'conservation' in ds: W_CONSERVATION = 0.0
+        if 'p2rank'       in ds: W_P2RANK = 0.0
+        if 'propensity'   in ds: W_PROPENSITY = 0.0
+        if '3di'          in ds: W_3DI = 0.0
+
         score = (W_CONSERVATION * s_conservation
                  + W_P2RANK * s_p2rank
                  + W_PROPENSITY * s_propensity
@@ -328,7 +335,9 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     
     # === PASS 2: Spatial clustering bonus ===
     W_CLUSTERING = 0.30
-    
+    if disable_signals and 'clustering' in disable_signals:
+        W_CLUSTERING = 0.0
+
     if pdb_file and Path(pdb_file).exists():
         ca_coords = parse_ca_coordinates(pdb_file)
         
@@ -563,6 +572,10 @@ def main():
     parser.add_argument('--pdb-file', default=None,
                         help='Path to PDB file for spatial clustering (optional)')
     parser.add_argument('--min-identity', type=float, default=0.0)
+    parser.add_argument('--disable-signals', default='',
+                        help='Comma-separated signals to zero out for ablation. '
+                             'Options: conservation, p2rank, propensity, 3di, clustering. '
+                             'E.g. --disable-signals p2rank,3di')
     parser.add_argument('--output', '-o', help='Save results to JSON file')
     
     args = parser.parse_args()
@@ -620,6 +633,10 @@ def main():
     else:
         runs = [("primary", top_n if top_n else n_true)]
 
+    disable_signals = {s.strip() for s in args.disable_signals.split(',') if s.strip()}
+    if disable_signals:
+        print(f"  Ablation: disabling signals {sorted(disable_signals)}")
+
     run_results = {}
     for label, n in runs:
         predicted = get_top_conserved_positions(
@@ -632,7 +649,8 @@ def main():
             exclude_structural=args.exclude_structural,
             use_catalytic_propensity=args.catalytic_propensity,
             p2rank_scores=p2rank_scores,
-            pdb_file=args.pdb_file
+            pdb_file=args.pdb_file,
+            disable_signals=disable_signals
         )
         m = calculate_metrics(predicted, true_positions)
         run_results[label] = {'top_n': n, 'predicted': sorted(predicted), 'metrics': m}
