@@ -6,11 +6,14 @@ catalytic column by which step of the pipeline drops it:
 
   1. filter_gaps          — gap_frequency > 0.5 → --exclude-gaps drops it
   2. filter_identity      — identity < 0.2     → --min-identity 0.2 drops it
-  3. pass_low_conservation — passes filters, but column's conservation score
-                              is not among the top 3×n_true by conservation alone
-                              (so something other than other features is the issue —
-                              the conservation signal itself is weak here)
-  4. pass_high_conservation — passes filters, AND in top 3×n_true by conservation
+  3. pass_low_aa_low_3di    — passes filters; the column is NOT in top 3×n_true
+                              by AA conservation alone, AND NOT in top 3×n_true
+                              by 3Di conservation alone. Neither signal picks it up.
+  4. pass_low_aa_high_3di   — passes filters; NOT in top 3×n_true by AA conservation,
+                              BUT IS in top 3×n_true by 3Di conservation. These are
+                              the residues that the user's 3Di-thesis would rescue
+                              if 3Di were given more weight in the scoring formula.
+  5. pass_high_conservation — passes filters, AND in top 3×n_true by AA conservation
                               alone, but the full scoring formula
                               (conservation + P2Rank + propensity + 3Di + clustering)
                               still didn't rank it in the top 3×n_true predicted set.
@@ -189,14 +192,22 @@ def main():
             # mapping_fail_all — handled by other diagnostic
             continue
 
-        # Get conservation scores for ALL columns to rank by conservation alone
-        # (columns are 1-based positions; mapping is 0-based or 1-based? Check both).
+        # Rank columns by AA conservation and by 3Di conservation independently.
+        # Columns missing a 3Di score are treated as score 0 for ranking purposes.
         cons_sorted = sorted(
-            ((pos, pdata.get('conservation', 0.0)) for pos, pdata in positions.items()),
+            ((pos, pdata.get('conservation', 0.0) or 0.0) for pos, pdata in positions.items()),
             key=lambda x: -x[1],
         )
-        # rank table: position → conservation rank (1-based, ties broken by order)
         cons_rank = {pos: i + 1 for i, (pos, _) in enumerate(cons_sorted)}
+
+        cons3di_sorted = sorted(
+            ((pos, pdata.get('3di_conservation', 0.0) or 0.0) for pos, pdata in positions.items()),
+            key=lambda x: -x[1],
+        )
+        cons3di_rank = {pos: i + 1 for i, (pos, _) in enumerate(cons3di_sorted)}
+        # Detect whether 3Di was actually computed (else all zeros → ranks are arbitrary)
+        any_3di = any((pdata.get('3di_conservation') or 0) > 0 for pdata in positions.values())
+
         # how many "top" by conservation alone we'd accept
         top_k = top_n or (len(gt) * 3)  # fallback to 3x if not set
 
@@ -233,25 +244,34 @@ def main():
                     gf = pdata.get('gap_frequency') or 0.0
                     ident = pdata.get('identity') or 0.0
                     cons = pdata.get('conservation') or 0.0
+                    cons3di = pdata.get('3di_conservation')
+                    cons3di_val = cons3di if cons3di is not None else 0.0
                     rank = cons_rank.get(pos, -1)
+                    rank_3di = cons3di_rank.get(pos, -1) if any_3di else -1
                     if gf > args.gap_threshold:
                         cohort = 'filter_gaps'
                     elif ident < args.identity_threshold:
                         cohort = 'filter_identity'
-                    elif rank > top_k:
-                        cohort = 'pass_low_conservation'
-                    else:
+                    elif rank <= top_k:
                         cohort = 'pass_high_conservation'
+                    elif any_3di and 0 < rank_3di <= top_k:
+                        cohort = 'pass_low_aa_high_3di'
+                    else:
+                        cohort = 'pass_low_aa_low_3di'
                     row = {
                         'pdb_id': pdb_id, 'resid': resid, 'column': col, 'position': pos,
                         'gap_frequency': f'{gf:.3f}', 'identity': f'{ident:.3f}',
                         'conservation': f'{cons:.3f}',
-                        'conservation_rank': rank, 'top_k': top_k, 'cohort': cohort,
+                        'conservation_rank': rank,
+                        '3di_conservation': f'{cons3di_val:.3f}' if cons3di is not None else '',
+                        '3di_rank': rank_3di if any_3di else '',
+                        'top_k': top_k, 'cohort': cohort,
                     }
                 # Track the best (lowest-severity) cohort if multiple columns map to same resid
-                severity = {'filter_gaps': 3, 'filter_identity': 2,
-                            'pass_low_conservation': 1, 'pass_high_conservation': 0,
-                            'position_lookup_failed': 4}
+                severity = {'filter_gaps': 4, 'filter_identity': 3,
+                            'pass_low_aa_low_3di': 2, 'pass_low_aa_high_3di': 1,
+                            'pass_high_conservation': 0,
+                            'position_lookup_failed': 5}
                 if best_cohort is None or severity.get(cohort, 5) < severity.get(best_cohort, 5):
                     best_cohort = cohort
                     best_row = row
@@ -276,7 +296,8 @@ def main():
     print("=" * 70)
     print(f"  {'cohort':<28}{'count':>8}{'%':>8}")
     print("=" * 70)
-    order = ['filter_gaps', 'filter_identity', 'pass_low_conservation',
+    order = ['filter_gaps', 'filter_identity',
+             'pass_low_aa_low_3di', 'pass_low_aa_high_3di',
              'pass_high_conservation', 'position_lookup_failed']
     for c in order:
         n = cohort_counts.get(c, 0)
@@ -296,7 +317,9 @@ def main():
     with open(out_path, 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=[
             'pdb_id', 'resid', 'column', 'position', 'gap_frequency', 'identity',
-            'conservation', 'conservation_rank', 'top_k', 'cohort'], delimiter='\t')
+            'conservation', 'conservation_rank',
+            '3di_conservation', '3di_rank',
+            'top_k', 'cohort'], delimiter='\t')
         w.writeheader()
         w.writerows(table_rows)
     print(f"\nWrote {out_path}  ({len(table_rows)} rows)")
@@ -307,35 +330,44 @@ def main():
         print("No residues to analyze. Check rescore_dir / batch_dir paths.")
     else:
         n_filter = cohort_counts.get('filter_gaps', 0) + cohort_counts.get('filter_identity', 0)
-        n_score = cohort_counts.get('pass_low_conservation', 0) + cohort_counts.get('pass_high_conservation', 0)
-        if n_filter > n_score * 1.5:
-            print(f"RECOMMENDATION: filter dominates ({n_filter} of {total_resids}).")
-            if cohort_counts.get('filter_identity', 0) > cohort_counts.get('filter_gaps', 0):
-                print("  → --min-identity 0.2 is the bigger culprit. Try --min-identity 0 or 0.1")
-                print("    and re-run rescore. Catalytic residues are often at high-diversity")
-                print("    columns (functionally conserved, sequence-variable), so this filter")
-                print("    can systematically drop them.")
-            else:
-                print("  → --exclude-gaps is the bigger culprit. Catalytic residues in flexible")
-                print("    loops or partially-aligned regions are being dropped. Try raising the")
-                print("    gap threshold (e.g., 0.7) or removing --exclude-gaps and tuning")
-                print("    scoring weights to deprioritize gappy columns instead.")
-        elif n_score > n_filter * 1.5:
-            print(f"RECOMMENDATION: scoring dominates ({n_score} of {total_resids}).")
-            if cohort_counts.get('pass_high_conservation', 0) > cohort_counts.get('pass_low_conservation', 0):
-                print("  → Catalytic columns ARE in top-3N by conservation alone, but the full")
-                print("    scoring formula downranks them. Other features (P2Rank / propensity /")
-                print("    3Di / cluster bonus) are working against you. Re-weight or ablate them.")
-            else:
-                print("  → Conservation signal itself is too weak — catalytic columns are not in")
-                print("    top-3N by conservation. Either the MSA is uninformative for these PDBs")
-                print("    (revisit cluster quality / alignment depth) or the catalytic-residue")
-                print("    columns genuinely aren't more conserved than non-catalytic columns")
-                print("    in your data. This is the harder case.")
-        else:
-            print(f"RECOMMENDATION: split ~evenly (filter {n_filter} vs scoring {n_score}).")
-            print("  → Both knobs need attention. Easiest first move: try --min-identity 0 to")
-            print("    eliminate that filter, re-run rescore, see how F1 shifts.")
+        n_3di_rescue = cohort_counts.get('pass_low_aa_high_3di', 0)
+        n_pass_low = cohort_counts.get('pass_low_aa_low_3di', 0)
+        n_pass_high = cohort_counts.get('pass_high_conservation', 0)
+
+        print(f"RECOMMENDATION SUMMARY ({total_resids} catalytic residues in F1=0 cohort):")
+        print()
+        if n_filter:
+            print(f"  • {n_filter} ({100*n_filter/total_resids:.0f}%) lost to filters → relax "
+                  f"--exclude-gaps and/or --min-identity (cheapest fix).")
+        if n_3di_rescue:
+            print(f"  • {n_3di_rescue} ({100*n_3di_rescue/total_resids:.0f}%) rescuable by 3Di "
+                  f"conservation alone → up-weight 3Di in scoring (validates the thesis).")
+        if n_pass_low:
+            print(f"  • {n_pass_low} ({100*n_pass_low/total_resids:.0f}%) miss in BOTH AA & 3Di → "
+                  f"neither signal works for these. Hardest cohort. Likely needs another signal "
+                  f"(P2Rank, propensity, cluster context) or these are M-CSA-label edge cases.")
+        if n_pass_high:
+            print(f"  • {n_pass_high} ({100*n_pass_high/total_resids:.0f}%) reached top-N by "
+                  f"AA conservation but were downranked by other features → ablate or re-tune weights.")
+
+        def has_meaningful_3di(rows):
+            for r in rows:
+                s = r.get('3di_conservation')
+                if not s:
+                    continue
+                try:
+                    if float(s) > 0:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+            return False
+
+        if not has_meaningful_3di(table_rows):
+            print()
+            print("  WARNING: 3di_conservation is empty/zero throughout. Either the pipeline")
+            print("  didn't save 3Di scores for this batch, or 3di_conservation was computed")
+            print("  but all values are 0. Re-run pipeline with the 3Di alignment passed to")
+            print("  score_conservation.py to populate this signal — then re-run this diagnostic.")
     print("=" * 70)
 
 
