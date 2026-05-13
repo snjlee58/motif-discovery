@@ -436,7 +436,6 @@ if [ -f "$MCSA_FILE" ]; then
     --pdb-file $PDB_CACHE/${PDB_ID}.pdb \
     --top-n auto \
     --exclude-gaps \
-    --catalytic-propensity \
     $P2RANK_ARG \
     --min-identity 0.2 \
     --output $SCRATCH/$OUTDIR/baseline_performance.json

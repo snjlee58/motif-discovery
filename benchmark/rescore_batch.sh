@@ -115,7 +115,6 @@ rescore_one() {
         --pdb-id "$PDB_LOWER" \
         --top-n auto \
         $GAPS_ARG \
-        --catalytic-propensity \
         $P2RANK_ARG \
         $PDB_ARG \
         $MULT_ARG \
