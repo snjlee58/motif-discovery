@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --time=2:00:00
 #SBATCH --output=/home/sunnylee/motif/slurm_logs/motif_single_%j.out
 

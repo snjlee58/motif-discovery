@@ -16,6 +16,12 @@ set -euo pipefail
 #
 # Top-N comparison:
 #   TOP_N_MULTIPLIERS=1,2,3 bash rescore_batch.sh <batch_dir>
+#
+# Filter relaxation (for testing whether filters are over-aggressive):
+#   EXCLUDE_GAPS=0           # disable --exclude-gaps (keep gappy columns)
+#   MIN_IDENTITY=0           # set --min-identity 0 (no consensus-identity filter)
+# Example:
+#   EXCLUDE_GAPS=0 MIN_IDENTITY=0 TOP_N_MULTIPLIERS=1,2,3 bash rescore_batch.sh <dir>
 
 BATCH_DIR=${1:?"Usage: bash rescore_batch.sh <batch_dir> [n_jobs]"}
 N_JOBS=${2:-8}
@@ -25,13 +31,9 @@ N_JOBS=${2:-8}
 # single top-N behaviour.
 TOP_N_MULTIPLIERS="${TOP_N_MULTIPLIERS:-}"
 
-# Extra args passed straight to benchmark_mcsa.py (e.g. ablation flags).
-# Example: BENCH_EXTRA_ARGS="--disable-signals p2rank,3di"
-BENCH_EXTRA_ARGS="${BENCH_EXTRA_ARGS:-}"
-
-# Optional tag appended to the rescore dir name so ablation runs don't
-# collide when launched within the same second.
-RESCORE_TAG="${RESCORE_TAG:-}"
+# Filter knobs (defaults preserve the historical behaviour)
+EXCLUDE_GAPS="${EXCLUDE_GAPS:-1}"
+MIN_IDENTITY="${MIN_IDENTITY:-0.2}"
 
 MOTIF_DIR="$HOME/motif"
 FAST="${FAST:-/fast/sunny}"
@@ -40,7 +42,8 @@ PDB_CACHE="$FAST/pdb_files"
 TIMESTAMP=$(date +%y%m%d_%H%M%S)
 RESULTS_DIR="$BATCH_DIR/rescore_${TIMESTAMP}"
 [ -n "$TOP_N_MULTIPLIERS" ] && RESULTS_DIR="${RESULTS_DIR}_topn${TOP_N_MULTIPLIERS//,/-}"
-[ -n "$RESCORE_TAG" ] && RESULTS_DIR="${RESULTS_DIR}_${RESCORE_TAG}"
+[ "$EXCLUDE_GAPS" = "0" ] && RESULTS_DIR="${RESULTS_DIR}_nogap"
+[ "$MIN_IDENTITY" != "0.2" ] && RESULTS_DIR="${RESULTS_DIR}_id${MIN_IDENTITY}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -76,6 +79,7 @@ echo "  Jobs:     $N_JOBS parallel"
 echo "  Output:   $RESULTS_DIR/"
 echo "  M-CSA:    $MCSA_FILE"
 [ -n "$TOP_N_MULTIPLIERS" ] && echo "  Top-N comparison multipliers: $TOP_N_MULTIPLIERS"
+echo "  Filters:  --exclude-gaps=$EXCLUDE_GAPS  --min-identity=$MIN_IDENTITY"
 echo "============================================"
 
 TMPFILE=$(mktemp)
@@ -103,22 +107,23 @@ rescore_one() {
     local MULT_ARG=""
     [ -n "$TOP_N_MULTIPLIERS" ] && MULT_ARG="--top-n-multipliers $TOP_N_MULTIPLIERS"
 
+    local GAPS_ARG=""
+    [ "$EXCLUDE_GAPS" = "1" ] && GAPS_ARG="--exclude-gaps"
+
     cd "$MOTIF_DIR" && python3 src/benchmark_mcsa.py \
         "$CONS" "$MCSA_FILE" "$MAP" \
         --pdb-id "$PDB_LOWER" \
         --top-n auto \
-        --exclude-gaps \
-        --catalytic-propensity \
+        $GAPS_ARG \
         $P2RANK_ARG \
         $PDB_ARG \
         $MULT_ARG \
-        $BENCH_EXTRA_ARGS \
-        --min-identity 0.2 \
+        --min-identity "$MIN_IDENTITY" \
         --output "$RESULTS_DIR/${PDB_ID}.json" \
         2>/dev/null
 }
 export -f rescore_one
-export BATCH_DIR PDB_CACHE MCSA_FILE RESULTS_DIR TOP_N_MULTIPLIERS BENCH_EXTRA_ARGS MOTIF_DIR
+export BATCH_DIR PDB_CACHE MCSA_FILE RESULTS_DIR TOP_N_MULTIPLIERS MOTIF_DIR EXCLUDE_GAPS MIN_IDENTITY
 
 xargs -a "$TMPFILE" -P "$N_JOBS" -I{} bash -c 'rescore_one "$@"' _ {}
 

@@ -185,20 +185,19 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                                 exclude_gaps: bool = True,
                                 min_identity: float = 0.0,
                                 exclude_structural: bool = False,
-                                use_catalytic_propensity: bool = False,
                                 p2rank_scores: Dict = None,
                                 pdb_file: str = None,
                                 disable_signals: Set[str] = None) -> List[int]:
     """
     Extract top conserved positions mapped to PDB residue IDs.
-    
+
     Uses either top-N or conservation threshold for selection.
-    Combined score = w1*conservation + w2*p2rank + w3*propensity + w4*clustering
-    
+    Combined score = w1*conservation + w2*p2rank + w3*3Di_conservation + w4*clustering
+
     Two-pass approach:
-      Pass 1: Score with conservation + propensity + p2rank
+      Pass 1: Score with conservation + p2rank + 3Di
       Pass 2: Compute spatial clustering among top candidates, add as bonus, re-rank
-    
+
     Args:
         conservation_data: Conservation JSON
         alignment_mapping: Dict mapping alignment_column -> resid
@@ -206,8 +205,7 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         conservation_threshold: Min conservation score (overrides top_n)
         exclude_gaps: Filter high-gap positions
         min_identity: Minimum identity threshold
-        exclude_structural: Hard-filter G, P, A (aggressive, not recommended)
-        use_catalytic_propensity: Weight scores by M-CSA catalytic propensity
+        exclude_structural: Hard-filter G, P, A residues (aggressive; off by default)
         p2rank_scores: Dict of {auth_resid: {"score": float, "probability": float, ...}}
                        from parse_p2rank.py output
         pdb_file: Path to PDB file for spatial clustering (optional)
@@ -215,31 +213,10 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     Returns:
         List of PDB residue IDs (resid)
     """
-    # Catalytic propensity from M-CSA (Ribeiro et al. 2017)
-    CATALYTIC_PROPENSITY = {
-        'H': 8.01, # Histidine (His)
-        'C': 4.66, # Cysteine (Cys)
-        'D': 3.04, # Aspartic acid (Asp)
-        'E': 2.09, # Glutamic acid (Glu)
-        'K': 1.58, # Lysine (Lys)
-        'R': 1.81, # Arginine (Arg)
-        'S': 0.95, # Serine (Ser)
-        'T': 0.56, # Threonine (Thr)
-        'Y': 1.84, # Tyrosine (Tyr)
-        'N': 0.97, # Asparagine (Asn)
-        'Q': 0.48, # Glutamine (Gln)
-        'W': 1.03, # Tryptophan (Trp)
-        'F': 0.40, # Phenylalanine (Phe)
-        'M': 0.26, # Methionine (Met)
-        'I': 0.04, # Isoleucine (Ile)
-        'L': 0.04, # Leucine (Leu)
-        'V': 0.03, # Valine (Val)
-        'A': 0.01, # Alanine (Ala)
-        'G': 0.02, # Glycine (Gly)
-        'P': 0.03, # Proline (Pro)
-        'X': 0.5, # Unknown
-    }
-    
+    # NOTE (2026-05): the M-CSA catalytic-propensity prior (Ribeiro et al. 2017)
+    # was removed. It is derived from M-CSA entries themselves, so benchmarking
+    # against M-CSA with it active circularly inflates F1; it also doesn't
+    # generalise to non-catalytic active sites (DNA/RNA/ligand interactions).
     STRUCTURAL_AAS = {'G', 'P', 'A'}
     
     positions = conservation_data['positions']
@@ -276,16 +253,7 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
         # Signal 1: Conservation (already 0-1)
         s_conservation = pos['conservation']
         
-        # Signal 2: Catalytic propensity
-        s_propensity = 0.0
-        if use_catalytic_propensity:
-            aa = pos['consensus'].upper()
-            propensity = CATALYTIC_PROPENSITY.get(aa, 0.5)
-            # Normalize: max propensity is ~8.01 (His)
-            s_propensity = min(propensity / 8.01, 1.0)
-            pos['catalytic_propensity'] = propensity
-        
-        # Signal 3: P2Rank binding site probability
+        # Signal 2: P2Rank binding site probability
         s_p2rank = 0.0
         if p2rank_scores:
             p2rank_data = p2rank_scores.get(str(resid)) or p2rank_scores.get(resid)
@@ -301,14 +269,13 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
                 # No P2Rank data for this residue — leave at 0, don't penalize
                 pos['p2rank_probability'] = None
 
-        # Signal 4: 3Di structural conservation (absent in older JSONs → 0, no penalty)
+        # Signal 3: 3Di structural conservation (absent in older JSONs → 0, no penalty)
         s_3di = pos.get('3di_conservation') or 0.0
 
         # Weighted additive combination
         # Conservation is the backbone, other signals boost
         W_CONSERVATION = 1.0
         W_P2RANK = 0.35
-        W_PROPENSITY = 0.25
         W_3DI = 0.30
 
         ds = disable_signals or set()
@@ -319,7 +286,6 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
 
         score = (W_CONSERVATION * s_conservation
                  + W_P2RANK * s_p2rank
-                 + W_PROPENSITY * s_propensity
                  + W_3DI * s_3di)
         
         pos['combined_score'] = score
@@ -330,7 +296,7 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     if p2rank_scores:
         print(f"  P2Rank scores matched: {n_p2rank_matched}/{len(filtered)} residues")
     
-    # === PASS 1: Sort by preliminary score (conservation + propensity + p2rank) ===
+    # === PASS 1: Sort by preliminary score (conservation + p2rank + 3Di) ===
     sorted_pass1 = sorted(filtered, key=lambda p: p['combined_score'], reverse=True)
     
     # === PASS 2: Spatial clustering bonus ===
@@ -372,8 +338,6 @@ def get_top_conserved_positions(conservation_data: Dict, alignment_mapping: Dict
     
     # Log what signals are active
     signals = []
-    if use_catalytic_propensity:
-        signals.append("catalytic propensity")
     if p2rank_scores:
         signals.append("P2Rank binding site")
     if pdb_file and Path(pdb_file).exists():
@@ -559,14 +523,13 @@ def main():
                              'Lets you separate "missing the residues entirely" (no recall jump '
                              'at higher N) from "ranking them too low" (recall improves with N).')
     parser.add_argument('--conservation-threshold', type=float, default=None,
-                        help='Conservation score threshold (overrides --top-n). '
-                             'E.g., 0.6 selects all residues with conservation >= 0.6')
+                        help='Combined-score threshold (overrides --top-n). Selects all '
+                             'residues whose combined_score (weighted sum of conservation '
+                             '+ P2Rank + 3Di + spatial clustering) >= this value. '
+                             'E.g., 1.0 is a reasonable starting point with current weights.')
     parser.add_argument('--exclude-gaps', action='store_true', default=True)
     parser.add_argument('--exclude-structural', action='store_true', default=False,
-                        help='Hard-filter G, P, A residues (not recommended, use --catalytic-propensity instead)')
-    parser.add_argument('--catalytic-propensity', action='store_true', default=False,
-                        help='Weight conservation by M-CSA catalytic propensity (recommended). '
-                             'Boosts H, C, D, E; dampens G, P, A, hydrophobics.')
+                        help='Hard-filter G, P, A residues (aggressive; off by default).')
     parser.add_argument('--p2rank-json', default=None,
                         help='P2Rank scores JSON from parse_p2rank.py (binding site prediction)')
     parser.add_argument('--pdb-file', default=None,
@@ -647,7 +610,6 @@ def main():
             exclude_gaps=args.exclude_gaps,
             min_identity=args.min_identity,
             exclude_structural=args.exclude_structural,
-            use_catalytic_propensity=args.catalytic_propensity,
             p2rank_scores=p2rank_scores,
             pdb_file=args.pdb_file,
             disable_signals=disable_signals

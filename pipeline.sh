@@ -1,36 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-# Pipeline: query → find AFDB cluster → get all members → foldmason
-
-# Map query protein to afdb cluster representative
-
-# Get pdb of members of that cluster
-
-# Foldmason MSA of the members
-
-# Conservation scoring
-
-# for each protein:
-#     foldseek easy-search -> foldmason
-
-# for each cluster:
-#     foldmason easy-msa cluster_members/
-    # foldmason easy-msa beta_lactamase_cluster/ msaDB msa_result tmp
-
-# Family View Pipeline
-# Instead of: query → foldseek search → hits → foldmason
-# We do:      query → find AFDB cluster → get all members → foldmason
+# Pipeline: query → foldseek search (AFDB50) → top-N homologs → foldmason MSA →
+#           conservation + P2Rank + 3Di + spatial-clustering scoring →
+#           M-CSA benchmark
 #
-# Prerequisites — AFDB cluster files (v6 to match AlphaFold v6 structures):
-#   mkdir -p $FAST/afdb_clusters/v6
-#   cd $FAST/afdb_clusters/v6
-#   wget https://afdb-cluster.steineggerlab.workers.dev/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
-#   gunzip 5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz
+# Prerequisites:
+#   - foldseek binary on PATH
+#   - AFDB50 foldseek database at $FOLDSEEK_DB
+#     (default: /fast/databases/foldseek/afdb/afdb50)
+#   - M-CSA TSV at $MCSA_FILE (for benchmarking)
 #
-# Optional companion files (for analysis/analyze_cluster_sizes.py):
-#   v6/1-AFDBClusters-repId_entryId_cluFlag_taxId.tsv.gz  (cluster info, smaller)
-#   v6/2-repId_isDark_nMem_repLen_avgLen_repPlddt_avgPlddt_LCAtaxId.tsv.gz  (per-cluster metadata)
+# Tunables (env vars; all have defaults):
+#   FOLDSEEK_DB, FOLDSEEK_MAX_SEQS, FOLDSEEK_PROB_MIN, FOLDSEEK_TOP_N
+#   SCORE_T (combined-score threshold for catalytic prediction)
+#   DOWNLOAD_JOBS (parallel AlphaFold downloads)
+#
+# The AFDB-cluster lookup mode (query → AFDB cluster → all members → MSA) is
+# preserved as commented-out code in STEP 1 for the future "analyse a given
+# AFDB cluster" use case.
 #
 # Usage:
 #   bash pipeline.sh <pdb_id> [output_dir] [--quiet]
@@ -54,6 +42,11 @@ OUTDIR=${2:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 QUIET=${3:-""}
 UNIPROT_ID=${UNIPROT_ID:-""}   # env-var override; otherwise resolved below
 
+# Combined-score threshold for catalytic-residue selection. Predicted set =
+# all residues with combined_score >= SCORE_T (no ground-truth-anchoring).
+# Override via env: SCORE_T=1.2 bash pipeline.sh 1BTL
+SCORE_T="${SCORE_T:-1.0}"
+
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 
 # $FAST points to shared NVMe storage (e.g. /fast/sunny) holding persistent reference
@@ -65,6 +58,13 @@ CLUSTER_FILE="$FAST/afdb_clusters/v6/5-allmembers-repId-entryId-cluFlag-taxId.ts
 MCSA_FILE="$FAST/m-csa/catalytic_residues_homologues_parsed.tsv"
 PDB_CACHE="$FAST/pdb_files"
 mkdir -p "$PDB_CACHE"
+
+# Foldseek homolog-search settings (default workflow).
+# AFDB50 database lives in the shared /fast/databases tree, not per-user $FAST.
+FOLDSEEK_DB="${FOLDSEEK_DB:-/fast/databases/foldseek/afdb/afdb50}"
+FOLDSEEK_MAX_SEQS="${FOLDSEEK_MAX_SEQS:-1000}"   # foldseek --max-seqs
+FOLDSEEK_PROB_MIN="${FOLDSEEK_PROB_MIN:-0.8}"    # parse_foldseek_hits --prob-min
+FOLDSEEK_TOP_N="${FOLDSEEK_TOP_N:-200}"          # parse_foldseek_hits --top-n
 
 # Set up logging
 mkdir -p $SCRATCH/$OUTDIR
@@ -96,10 +96,12 @@ if [ -z "$UNIPROT_ID" ]; then
   fi
   echo "  Submitted job: $JOB_ID"
 
-  # Step 2: Poll until complete (wget follows redirects by default)
+  # Step 2: Poll until complete (wget follows redirects by default).
+  # `|| true` makes the loop tolerant of transient UniProt API hiccups —
+  # a single 5xx response shouldn't kill the whole pipeline under set -e.
   for i in $(seq 1 15); do
     sleep 1
-    RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}")
+    RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}" || true)
 
     # Check if we got results directly (status redirects to results when done)
     UNIPROT_ID=$(echo "$RESULT_RAW" | python3 -c "
@@ -131,8 +133,9 @@ else:
       break
     fi
 
-    # Fallback: try results/stream endpoint directly
-    UNIPROT_ID=$(wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" \
+    # Fallback: try results/stream endpoint directly. `|| true` keeps the loop
+    # alive across transient failures (pipefail would otherwise propagate them).
+    UNIPROT_ID=$( { wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" || true; } \
       | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -163,86 +166,117 @@ else:
 fi
 
 echo "============================================"
-echo "Family View Pipeline"
-echo "  UniProt:    $UNIPROT_ID"
-echo "  PDB:        $PDB_ID"
-echo "  Output:     $SCRATCH/$OUTDIR"
+echo "Homolog-Search Pipeline (foldseek → foldmason)"
+echo "  UniProt:        $UNIPROT_ID"
+echo "  PDB:            $PDB_ID"
+echo "  Foldseek DB:    $FOLDSEEK_DB"
+echo "  Output:         $SCRATCH/$OUTDIR"
 echo "============================================"
 
 #####################
-# STEP 1: Find AFDB cluster for this protein
+# STEP 0b: Download experimental query PDB (needed as foldseek query)
 #####################
 echo ""
-echo "[1] Finding AFDB cluster for $UNIPROT_ID..."
+echo "[0b] Ensuring experimental query PDB is available..."
 
-if [ ! -f "$CLUSTER_FILE" ]; then
-  echo "ERROR: Cluster file not found at $CLUSTER_FILE"
-  echo "Download it first (FAST=$FAST):"
-  echo "  mkdir -p $FAST/afdb_clusters/v6 && cd $FAST/afdb_clusters/v6"
-  echo "  wget https://afdb-cluster.steineggerlab.workers.dev/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
-  echo "  gunzip 5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
+PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
+if [ ! -f "$PDB_FILE" ]; then
+  echo "  Downloading $PDB_ID from RCSB..."
+  wget -q --timeout=30 \
+    "https://files.rcsb.org/download/${PDB_ID}.pdb" \
+    -O "$PDB_FILE" 2>/dev/null || rm -f "$PDB_FILE"
+fi
+
+# Fallback: if RCSB has no PDB, use the query's AlphaFold model instead.
+if [ ! -f "$PDB_FILE" ]; then
+  echo "  RCSB has no $PDB_ID; falling back to AlphaFold model for $UNIPROT_ID"
+  PDB_FILE="$PDB_CACHE/AF-${UNIPROT_ID}-F1-model_v6.pdb"
+  if [ ! -f "$PDB_FILE" ]; then
+    wget -q --timeout=30 \
+      "https://alphafold.ebi.ac.uk/files/AF-${UNIPROT_ID}-F1-model_v6.pdb" \
+      -O "$PDB_FILE" 2>/dev/null || rm -f "$PDB_FILE"
+  fi
+fi
+
+if [ ! -f "$PDB_FILE" ]; then
+  echo "ERROR: Could not obtain query structure (neither $PDB_ID.pdb from RCSB"
+  echo "       nor AF-${UNIPROT_ID}-F1-model_v6.pdb from AlphaFold)."
+  exit 1
+fi
+echo "  Query structure: $PDB_FILE"
+
+#####################
+# STEP 1: Foldseek homolog search
+#####################
+echo ""
+echo "[1] Running foldseek easy-search against $FOLDSEEK_DB..."
+
+if [ ! -f "${FOLDSEEK_DB}.dbtype" ]; then
+  echo "ERROR: Foldseek database not found at $FOLDSEEK_DB"
+  echo "       Expected mmseqs2-style files (e.g. ${FOLDSEEK_DB}.dbtype)."
   exit 1
 fi
 
-# # File 1 format: entryId \t repId \t taxId
-# # entryId is a UniProt accession
-# # Find the cluster representative for our protein
-# REP_ID=$(grep -m1 "^${UNIPROT_ID}\b" "$CLUSTER_FILE" | cut -f2)
+FOLDSEEK_TSV="$SCRATCH/$OUTDIR/foldseek_hits.tsv"
+foldseek easy-search \
+  "$PDB_FILE" \
+  "$FOLDSEEK_DB" \
+  "$FOLDSEEK_TSV" \
+  "$SCRATCH/tmp_foldseek" \
+  --format-output query,target,fident,alnlen,evalue,prob,lddt,alntmscore \
+  --max-seqs "$FOLDSEEK_MAX_SEQS"
 
-# if [ -z "$REP_ID" ]; then
-#   echo "ERROR: $UNIPROT_ID not found in AFDB clusters"
-#   echo "  Try searching with a different UniProt ID"
+N_HITS=$(wc -l < "$FOLDSEEK_TSV")
+echo "  Foldseek returned $N_HITS hits"
+
+# Parse → filter → top-N → UniProt accession list
+python3 src/parse_foldseek_hits.py \
+  "$FOLDSEEK_TSV" \
+  --prob-min "$FOLDSEEK_PROB_MIN" \
+  --top-n "$FOLDSEEK_TOP_N" \
+  -o "$SCRATCH/$OUTDIR/homologs.txt"
+
+# ─────────────────────────────────────────────────────────────────────────
+# ARCHIVED — AFDB cluster lookup (kept for the "analyse a given AFDB cluster"
+# use case; not used in the default homolog-search workflow).
+# ─────────────────────────────────────────────────────────────────────────
+# if [ ! -f "$CLUSTER_FILE" ]; then
+#   echo "ERROR: Cluster file not found at $CLUSTER_FILE"
+#   echo "Download it first (FAST=$FAST):"
+#   echo "  mkdir -p $FAST/afdb_clusters/v6 && cd $FAST/afdb_clusters/v6"
+#   echo "  wget https://afdb-cluster.steineggerlab.workers.dev/v6/5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
+#   echo "  gunzip 5-allmembers-repId-entryId-cluFlag-taxId.tsv.gz"
 #   exit 1
 # fi
-
+#
+# # File 5 format: repId \t memId \t cluFlag \t taxId
+# #   cluFlag=1: AFDB50 representative (Foldseek-clustered) — kept for our MSA
+# #   cluFlag=2: non-rep AFDB50 member (≥50% identical near-duplicate) — dropped
+# REP_ID=$(grep "${UNIPROT_ID}" "$CLUSTER_FILE" | head -1 | cut -f1) || true
+# if [ -z "$REP_ID" ]; then
+#   echo "ERROR: $UNIPROT_ID not found in AFDB clusters"
+#   exit 1
+# fi
 # echo "  Cluster representative: $REP_ID"
-
-# # Get all members in this cluster (all entries with the same repId)
-# grep "\b${REP_ID}\b" "$CLUSTER_FILE" | cut -f1 > $SCRATCH/$OUTDIR/cluster_members_all.txt
-# N_TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members_all.txt)
-# echo "  Total cluster members: $N_TOTAL"
-
-
-
-# File 5 format: repId \t memId \t cluFlag \t taxId
-#   cluFlag=1: AFDB50 representative (Foldseek-clustered) — kept for our MSA
-#   cluFlag=2: non-rep AFDB50 member (≥50% identical near-duplicate) — dropped
-# Filtering to cluFlag=1 gives a free 50%-identity dedup; cuts cluster size by
-# ~10x median for our M-CSA monomer set (analysis/cluster_sizes.tsv).
-REP_ID=$(grep "${UNIPROT_ID}" "$CLUSTER_FILE" | head -1 | cut -f1) || true
-
-if [ -z "$REP_ID" ]; then
-  echo "ERROR: $UNIPROT_ID not found in AFDB clusters"
-  echo "  Try searching with a different UniProt ID"
-  exit 1
-fi
-
-echo "  Cluster representative: $REP_ID"
-
-# AFDB50 reps only (cluFlag=1). Single awk pass writes the member list AND
-# counts both AFDB50 + full sizes — no second scan of the 1.9 GB file.
-COUNTS=$(awk -F'\t' -v rep="$REP_ID" -v out="$SCRATCH/$OUTDIR/cluster_members.txt" '
-  $1 == rep {
-    full++
-    if ($3 == 1) {
-      print $2 > out
-      afdb50++
-    }
-  }
-  END { printf "%d %d", afdb50+0, full+0 }
-' "$CLUSTER_FILE")
-N_AFDB50=$(echo "$COUNTS" | cut -d' ' -f1)
-N_FULL=$(echo "$COUNTS" | cut -d' ' -f2)
-echo "  Cluster members: $N_AFDB50 AFDB50 reps (of $N_FULL total) — using AFDB50 reps"
+# COUNTS=$(awk -F'\t' -v rep="$REP_ID" -v out="$SCRATCH/$OUTDIR/cluster_members.txt" '
+#   $1 == rep {
+#     full++
+#     if ($3 == 1) { print $2 > out; afdb50++ }
+#   }
+#   END { printf "%d %d", afdb50+0, full+0 }
+# ' "$CLUSTER_FILE")
+# N_AFDB50=$(echo "$COUNTS" | cut -d' ' -f1)
+# N_FULL=$(echo "$COUNTS" | cut -d' ' -f2)
+# echo "  Cluster members: $N_AFDB50 AFDB50 reps (of $N_FULL total)"
 
 #####################
-# STEP 2: Download AlphaFold structures for cluster members
+# STEP 2: Download AlphaFold structures for foldseek homologs
 #####################
 echo ""
-echo "[2] Downloading AlphaFold structures..."
+echo "[2] Downloading AlphaFold structures for homologs..."
 mkdir -p $SCRATCH/$OUTDIR/structures
 
-TOTAL=$(wc -l < $SCRATCH/$OUTDIR/cluster_members.txt)
+TOTAL=$(wc -l < $SCRATCH/$OUTDIR/homologs.txt)
 
 # Build the to-do list (skip already-cached structures from prior runs).
 TODO_FILE="$SCRATCH/$OUTDIR/to_download.txt"
@@ -250,7 +284,7 @@ TODO_FILE="$SCRATCH/$OUTDIR/to_download.txt"
 while read -r MEMBER_ID; do
   OUTFILE="$SCRATCH/$OUTDIR/structures/AF-${MEMBER_ID}-F1-model_v6.pdb"
   [ -f "$OUTFILE" ] || echo "$MEMBER_ID" >> "$TODO_FILE"
-done < $SCRATCH/$OUTDIR/cluster_members.txt
+done < $SCRATCH/$OUTDIR/homologs.txt
 NEED=$(wc -l < "$TODO_FILE")
 CACHED=$((TOTAL - NEED))
 echo "  $TOTAL total, $CACHED already cached, $NEED to download"
@@ -282,23 +316,9 @@ rm -f "$TODO_FILE"
 
 echo "  Done: downloaded=$DOWNLOADED  failed=$FAILED"
 
-# Add the experimental PDB structure for the query
-PDB_FILE="$PDB_CACHE/${PDB_ID}.pdb"
-if [ ! -f "$PDB_FILE" ]; then
-  echo "  Downloading $PDB_ID from RCSB..."
-  wget -q --timeout=30 \
-    "https://files.rcsb.org/download/${PDB_ID}.pdb" \
-    -O "$PDB_FILE" 2>/dev/null || {
-    echo "  WARNING: Could not download $PDB_ID.pdb from RCSB"
-  }
-fi
-
-if [ -f "$PDB_FILE" ]; then
-  echo "  Copying $PDB_ID.pdb into structures/"
-  cp "$PDB_FILE" $SCRATCH/$OUTDIR/structures/
-else
-  echo "  WARNING: No experimental PDB for $PDB_ID. Will use AlphaFold structure in MSA."
-fi
+# Add the query structure (downloaded earlier in STEP 0b) into the MSA pool.
+echo "  Copying query structure into structures/"
+cp "$PDB_FILE" $SCRATCH/$OUTDIR/structures/
 
 echo "  DEBUG: counting structures"
 N_STRUCTURES=$(find $SCRATCH/$OUTDIR/structures -name "*.pdb" -o -name "*.cif" | wc -l)
@@ -434,9 +454,8 @@ if [ -f "$MCSA_FILE" ]; then
     $SCRATCH/$OUTDIR/alignment_mapping.json \
     --pdb-id $PDB_ID_LOWER \
     --pdb-file $PDB_CACHE/${PDB_ID}.pdb \
-    --top-n auto \
+    --conservation-threshold $SCORE_T \
     --exclude-gaps \
-    --catalytic-propensity \
     $P2RANK_ARG \
     --min-identity 0.2 \
     --output $SCRATCH/$OUTDIR/baseline_performance.json
@@ -454,7 +473,8 @@ echo ""
 echo "[8] Done!"
 echo "============================================"
 echo "Output files in $SCRATCH/$OUTDIR/"
-echo "  cluster_members.txt       - UniProt IDs in this cluster"
+echo "  foldseek_hits.tsv         - raw foldseek easy-search output"
+echo "  homologs.txt              - filtered UniProt IDs (foldseek hits, top-N)"
 echo "  structures/               - downloaded AlphaFold PDBs"
 echo "  foldmason_result_aa.fa    - structural MSA (amino acid)"
 echo "  foldmason_result_3di.fa   - structural MSA (3Di)"
