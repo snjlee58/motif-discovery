@@ -96,10 +96,12 @@ if [ -z "$UNIPROT_ID" ]; then
   fi
   echo "  Submitted job: $JOB_ID"
 
-  # Step 2: Poll until complete (wget follows redirects by default)
+  # Step 2: Poll until complete (wget follows redirects by default).
+  # `|| true` makes the loop tolerant of transient UniProt API hiccups —
+  # a single 5xx response shouldn't kill the whole pipeline under set -e.
   for i in $(seq 1 15); do
     sleep 1
-    RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}")
+    RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}" || true)
 
     # Check if we got results directly (status redirects to results when done)
     UNIPROT_ID=$(echo "$RESULT_RAW" | python3 -c "
@@ -131,8 +133,9 @@ else:
       break
     fi
 
-    # Fallback: try results/stream endpoint directly
-    UNIPROT_ID=$(wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" \
+    # Fallback: try results/stream endpoint directly. `|| true` keeps the loop
+    # alive across transient failures (pipefail would otherwise propagate them).
+    UNIPROT_ID=$( { wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" || true; } \
       | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
