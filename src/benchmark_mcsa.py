@@ -514,8 +514,10 @@ def main():
                              'Lets you separate "missing the residues entirely" (no recall jump '
                              'at higher N) from "ranking them too low" (recall improves with N).')
     parser.add_argument('--conservation-threshold', type=float, default=None,
-                        help='Conservation score threshold (overrides --top-n). '
-                             'E.g., 0.6 selects all residues with conservation >= 0.6')
+                        help='Combined-score threshold (overrides --top-n). Selects all '
+                             'residues whose combined_score (weighted sum of conservation '
+                             '+ P2Rank + 3Di + spatial clustering) >= this value. '
+                             'E.g., 1.0 is a reasonable starting point with current weights.')
     parser.add_argument('--exclude-gaps', action='store_true', default=True)
     parser.add_argument('--exclude-structural', action='store_true', default=False,
                         help='Hard-filter G, P, A residues (aggressive; off by default).')
