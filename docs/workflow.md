@@ -92,8 +92,9 @@ Environment variables that change pipeline behaviour without code edits:
 | `FOLDSEEK_MAX_SEQS` | `1000` | `foldseek --max-seqs` (raw hit pool before filtering). |
 | `FOLDSEEK_PROB_MIN` | `0.8` | Minimum foldseek `prob` to keep a hit. |
 | `FOLDSEEK_TOP_N` | `200` | Cap on filtered hits → size of homolog pool. |
-| `SCORE_T` | `1.0` | Combined-score threshold for catalytic prediction. Sweep this. |
 | `DOWNLOAD_JOBS` | `8` | Parallel AlphaFold downloads (lower if running many pipelines concurrently). |
-| `UNIPROT_ID` | *(API)* | Manual override when the UniProt ID Mapping API is flaky. |
 
-Set per-run via env: `SCORE_T=1.2 FOLDSEEK_PROB_MIN=0.7 bash pipeline.sh 1BTL`.
+Set per-run via env: `FOLDSEEK_PROB_MIN=0.7 bash pipeline.sh 1BTL`.
+
+The combined-score threshold for catalytic prediction is hard-coded as
+`SCORE_T=1.0` in `pipeline.sh` — edit that line directly to sweep it.

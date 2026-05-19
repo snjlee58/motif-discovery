@@ -13,19 +13,16 @@ set -euo pipefail
 #
 # Tunables (env vars; all have defaults):
 #   FOLDSEEK_DB, FOLDSEEK_MAX_SEQS, FOLDSEEK_PROB_MIN, FOLDSEEK_TOP_N
-#   SCORE_T (combined-score threshold for catalytic prediction)
 #   DOWNLOAD_JOBS (parallel AlphaFold downloads)
 #
-# The AFDB-cluster lookup mode (query → AFDB cluster → all members → MSA) is
-# preserved as commented-out code in STEP 1 for the future "analyse a given
-# AFDB cluster" use case.
+# Hard-coded knobs (edit pipeline.sh directly to change):
+#   SCORE_T (combined-score threshold for catalytic prediction)
 #
 # Usage:
 #   bash pipeline.sh <pdb_id> [output_dir] [--quiet]
 #
 # The UniProt ID is resolved automatically from the PDB ID via the UniProt
-# ID Mapping API. To override (e.g. if the API is down or maps wrong):
-#   UNIPROT_ID=P62593 bash pipeline.sh 1BTL
+# ID Mapping API.
 #
 # Examples:
 #   bash pipeline.sh 1BTL
@@ -40,12 +37,10 @@ PIPELINE_START=$(date +%s)
 PDB_ID=${1:?"Usage: bash pipeline.sh <pdb_id> [output_dir] [--quiet]"}
 OUTDIR=${2:-$(date +%y%m%d_%H%M%S)_family_${PDB_ID}}
 QUIET=${3:-""}
-UNIPROT_ID=${UNIPROT_ID:-""}   # env-var override; otherwise resolved below
 
 # Combined-score threshold for catalytic-residue selection. Predicted set =
 # all residues with combined_score >= SCORE_T (no ground-truth-anchoring).
-# Override via env: SCORE_T=1.2 bash pipeline.sh 1BTL
-SCORE_T="${SCORE_T:-1.0}"
+SCORE_T=1.0
 
 PDB_ID_LOWER=$(echo "$PDB_ID" | tr '[:upper:]' '[:lower:]')
 
@@ -77,34 +72,33 @@ else
 fi
 
 #####################
-# STEP 0: Resolve UniProt ID if not provided
+# STEP 0: Resolve UniProt ID via UniProt ID Mapping API
 #####################
-if [ -z "$UNIPROT_ID" ]; then
-  echo "Resolving UniProt ID for PDB: $PDB_ID via UniProt ID Mapping API..."
+echo "Resolving UniProt ID for PDB: $PDB_ID via UniProt ID Mapping API..."
 
-  # Step 1: Submit mapping job (PDB -> UniProtKB)
-  SUBMIT_RESPONSE=$(wget -qO- \
-    --post-data="from=PDB&to=UniProtKB&ids=${PDB_ID_LOWER}" \
-    https://rest.uniprot.org/idmapping/run)
-  echo "  Submit response: $SUBMIT_RESPONSE"
+# Step 1: Submit mapping job (PDB -> UniProtKB)
+SUBMIT_RESPONSE=$(wget -qO- \
+  --post-data="from=PDB&to=UniProtKB&ids=${PDB_ID_LOWER}" \
+  https://rest.uniprot.org/idmapping/run)
+echo "  Submit response: $SUBMIT_RESPONSE"
 
-  JOB_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['jobId'])" 2>/dev/null)
+JOB_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['jobId'])" 2>/dev/null)
 
-  if [ -z "$JOB_ID" ]; then
-    echo "ERROR: Failed to submit UniProt ID mapping job"
-    exit 1
-  fi
-  echo "  Submitted job: $JOB_ID"
+if [ -z "$JOB_ID" ]; then
+  echo "ERROR: Failed to submit UniProt ID mapping job"
+  exit 1
+fi
+echo "  Submitted job: $JOB_ID"
 
-  # Step 2: Poll until complete (wget follows redirects by default).
-  # `|| true` makes the loop tolerant of transient UniProt API hiccups —
-  # a single 5xx response shouldn't kill the whole pipeline under set -e.
-  for i in $(seq 1 15); do
-    sleep 1
-    RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}" || true)
+# Step 2: Poll until complete (wget follows redirects by default).
+# `|| true` makes the loop tolerant of transient UniProt API hiccups —
+# a single 5xx response shouldn't kill the whole pipeline under set -e.
+for i in $(seq 1 15); do
+  sleep 1
+  RESULT_RAW=$(wget -qO- "https://rest.uniprot.org/idmapping/status/${JOB_ID}" || true)
 
-    # Check if we got results directly (status redirects to results when done)
-    UNIPROT_ID=$(echo "$RESULT_RAW" | python3 -c "
+  # Check if we got results directly (status redirects to results when done)
+  UNIPROT_ID=$(echo "$RESULT_RAW" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 # Case 1: redirected to results (has 'results' key)
@@ -125,18 +119,18 @@ else:
     print('')
 " 2>/dev/null)
 
-    if [ "$UNIPROT_ID" = "__RUNNING__" ]; then
-      echo "  Waiting for job to complete... (${i}s)"
-      UNIPROT_ID=""
-      continue
-    elif [ -n "$UNIPROT_ID" ]; then
-      break
-    fi
+  if [ "$UNIPROT_ID" = "__RUNNING__" ]; then
+    echo "  Waiting for job to complete... (${i}s)"
+    UNIPROT_ID=""
+    continue
+  elif [ -n "$UNIPROT_ID" ]; then
+    break
+  fi
 
-    # Fallback: try results/stream endpoint directly. `|| true` keeps the loop
-    # alive across transient failures (pipefail would otherwise propagate them).
-    UNIPROT_ID=$( { wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" || true; } \
-      | python3 -c "
+  # Fallback: try results/stream endpoint directly. `|| true` keeps the loop
+  # alive across transient failures (pipefail would otherwise propagate them).
+  UNIPROT_ID=$( { wget -qO- "https://rest.uniprot.org/idmapping/results/stream/${JOB_ID}" || true; } \
+    | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 results = data.get('results', [])
@@ -150,20 +144,18 @@ else:
     print('')
 " 2>/dev/null)
 
-    if [ -n "$UNIPROT_ID" ]; then
-      break
-    fi
-  done
-
-  if [ -z "$UNIPROT_ID" ]; then
-    echo "ERROR: Could not resolve UniProt ID for PDB $PDB_ID"
-    echo "  Debug: last raw response from API:"
-    echo "  $RESULT_RAW" | head -5
-    echo "  Try providing it manually: UNIPROT_ID=<uniprot_id> bash pipeline.sh $PDB_ID"
-    exit 1
+  if [ -n "$UNIPROT_ID" ]; then
+    break
   fi
-  echo "  Resolved: $PDB_ID -> $UNIPROT_ID"
+done
+
+if [ -z "$UNIPROT_ID" ]; then
+  echo "ERROR: Could not resolve UniProt ID for PDB $PDB_ID"
+  echo "  Debug: last raw response from API:"
+  echo "  $RESULT_RAW" | head -5
+  exit 1
 fi
+echo "  Resolved: $PDB_ID -> $UNIPROT_ID"
 
 echo "============================================"
 echo "Homolog-Search Pipeline (foldseek → foldmason)"
